@@ -8,12 +8,13 @@ from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.core.window import Window
 
-from Components.Video_capture import VideoCaptureWidget
-from Components.Warped_perspective import WarpedPerspectiveWidget
-from Components.Grid_visualization import GridVisualizationWidget
-from Pages.Robot_status import RobotStatusWidget  
-from Pages.Tags_info import TagsInfoWidget
-from Pages.Advanced_controls import AdvancedcontrolWidget
+from Pages.Video_capture import VideoCaptureWidget
+from Pages.Warped_perspective import WarpedPerspectiveWidget
+from Pages.Grid_visualization import GridVisualizationWidget
+from Components.Robot_status import RobotStatusWidget  
+from Components.Tags_info import TagsInfoWidget
+from Components.Advanced_controls import AdvancedcontrolWidget
+from Components.Tags_cords import TagsCordsWidget
 
 
 
@@ -63,6 +64,13 @@ class MainLayout(FloatLayout):
         advanced_widget.size_hint = (None, None)
         advanced_widget.pos = (1110, 10)
         self.add_widget(advanced_widget)
+
+        # TagsCordsWidget
+        tags_cords_widget = TagsCordsWidget()
+        tags_cords_widget.size_hint = (None, None)
+        tags_cords_widget.pos = (10, 400)
+        self.add_widget(tags_cords_widget)
+        
 
 
 class MainApp(App):

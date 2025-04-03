@@ -24,7 +24,7 @@ class GridVisualizationWidget(Widget):
             self.bg_rect = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[(10, 10), (10, 10), (0, 0), (10, 10)]
+                radius=[(0, 0), (0, 0), (0, 0), (10, 10)]
             )
 
         self.bind(pos=self._update_rect, size=self._update_rect)
