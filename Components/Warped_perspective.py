@@ -9,7 +9,7 @@ class WarpedPerspectiveWidget(BoxLayout):
 
         self.orientation = 'vertical'
         self.size_hint = (None, None)
-        self.size = (600, 600)
+        self.size = (600, 600) # 위젯 크기
 
         # 상단 바 (48px 높이)
         top_bar = Widget(size_hint=(1, None), height=48)

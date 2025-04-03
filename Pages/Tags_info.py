@@ -7,7 +7,7 @@ class TagsInfoWidget(Widget):
         super().__init__(**kwargs)
 
         self.size_hint = (None, None)
-        self.size = (200, 300)
+        self.size = (200, 350)  # 위젯 크기
         self.pos = (10, 10)
 
         # 바깥 보라색 배경
@@ -32,7 +32,7 @@ class TagsInfoWidget(Widget):
 
     def _add_inner_white_box(self):
         self.inner_box = Widget(size_hint=(None, None))
-        self.inner_box.size = (180, 280)
+        self.inner_box.size = (180, 330)
 
         with self.inner_box.canvas.before:
             Color(1, 1, 1, 1)  # 흰색 배경

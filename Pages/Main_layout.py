@@ -13,6 +13,11 @@ from Components.Warped_perspective import WarpedPerspectiveWidget
 from Components.Grid_visualization import GridVisualizationWidget
 from Pages.Robot_status import RobotStatusWidget  
 from Pages.Tags_info import TagsInfoWidget
+from Pages.Advanced_controls import AdvancedcontrolWidget
+
+
+
+
 
 # 창 크기 및 배경 색 설정
 Window.size = (1210, 820)
@@ -50,8 +55,14 @@ class MainLayout(FloatLayout):
         # RobotStatusWidget 
         robot_widget = RobotStatusWidget()
         robot_widget.size_hint = (None, None)
-        robot_widget.pos = (700, 10)
+        robot_widget.pos = (660, 10)
         self.add_widget(robot_widget)
+        
+        # AdvancedControlsWidget
+        advanced_widget = AdvancedcontrolWidget()
+        advanced_widget.size_hint = (None, None)
+        advanced_widget.pos = (1110, 10)
+        self.add_widget(advanced_widget)
 
 
 class MainApp(App):

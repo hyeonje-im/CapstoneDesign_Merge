@@ -7,8 +7,8 @@ class RobotStatusWidget(Widget):
         super().__init__(**kwargs)
 
         self.size_hint = (None, None)
-        self.size = (400, 250)
-        self.pos = (700, 10)
+        self.size = (450, 350) # 위젯 크기
+        self.pos = (660, 10)
 
         # 바깥 배경: 연보라색
         with self.canvas.before:
@@ -16,7 +16,7 @@ class RobotStatusWidget(Widget):
             self.bg_rect = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[(0, 0), (10, 10), (0, 0), (10, 10)]
+                radius=[(0, 0), (0, 0), (0, 0), (10, 10)]
             )
 
         self.bind(pos=self._update_rect, size=self._update_rect)
@@ -32,7 +32,7 @@ class RobotStatusWidget(Widget):
 
     def _add_inner_box(self):
         self.inner_box = Widget(size_hint=(None, None))
-        self.inner_box.size = (390, 240)  # 부모보다 가로세로 10 작게
+        self.inner_box.size = (430, 330)  # 부모보다 가로세로 10 작게
 
         with self.inner_box.canvas.before:
             Color(1, 1, 1, 1)  # 흰색
