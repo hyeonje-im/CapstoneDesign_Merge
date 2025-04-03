@@ -47,7 +47,7 @@ class MainLayout(FloatLayout):
         tags_widget.pos = (460, 10)
         self.add_widget(tags_widget)
 
-        # ✅ RobotStatusWidget 추가
+        # RobotStatusWidget 
         robot_widget = RobotStatusWidget()
         robot_widget.size_hint = (None, None)
         robot_widget.pos = (700, 10)
