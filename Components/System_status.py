@@ -2,10 +2,8 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.graphics import Color, RoundedRectangle
 from kivy.uix.widget import Widget
-from kivy.uix.button import Button
 
-
-class AdvancedcontrolWidget(BoxLayout):
+class SystemstatusWidget(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', spacing=0, padding=0, **kwargs)
 
@@ -14,15 +12,14 @@ class AdvancedcontrolWidget(BoxLayout):
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
         self.bind(pos=self.update_bg, size=self.update_bg)
 
+       
         # ── 상단 바 ──
         self.header = BoxLayout(size_hint_y=None, height=40)
         with self.header.canvas.before:
             Color(0.667, 0.769, 1.0, 1)
-
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[7, 7, 0, 0])
         self.header.bind(pos=self.update_header, size=self.update_header)
-        self.header.add_widget(Label(text="Advanced Controls", bold=True, color=(0, 0, 0, 1)))
-
+        self.header.add_widget(Label(text="System Status", bold=True, color=(0, 0, 0, 1)))
 
         # ── 아래 빈 흰 공간 ──
         self.grid_area = Widget()
