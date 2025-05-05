@@ -2,21 +2,20 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
-
-from Video_capture import VideoCaptureWidget 
-from Warped_perspective import WarpedperspectiveWidget  
-from Grid_visualization import GridVisualizationWidget 
+from kivy.uix.screenmanager import Screen
+from Pages.Video_capture import VideoCaptureWidget 
+from Pages.Warped_perspective import WarpedperspectiveWidget  
+from Pages.Grid_visualization import GridVisualizationWidget 
 from Components.Tags_info import TagsInfoWidget  # ← 임포트 추가
 from Components.System_status import SystemstatusWidget
 from Components.Advanced_controls import AdvancedcontrolWidget
 
 
-class ColoredScreen(FloatLayout):
+class ColoredScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 

@@ -1,4 +1,4 @@
-
+from kivy.uix.screenmanager import Screen
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -6,15 +6,19 @@ from kivy.uix.button import Button
 from kivy.graphics import Color, RoundedRectangle
 
 
-class AdvancedcontrolWidget(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', spacing=0, padding=0, **kwargs)
 
-        # 전체 배경
-        with self.canvas.before:
+class AdvancedcontrolWidget(Screen):  # ✅ Screen 상속
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        # ── 메인 레이아웃 (기존 BoxLayout 구조)
+        main_layout = BoxLayout(orientation='vertical', spacing=0, padding=0)
+
+        # ── 전체 배경
+        with main_layout.canvas.before:
             Color(0.823, 0.855, 1.0, 1)  # D2DAFF
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
-        self.bind(pos=self.update_bg, size=self.update_bg)
+            self.bg = RoundedRectangle(pos=main_layout.pos, size=main_layout.size, radius=[10])
+        main_layout.bind(pos=self.update_bg, size=self.update_bg)
 
         # ── 상단 바 ──
         self.header = BoxLayout(size_hint_y=None, height=40)
@@ -31,14 +35,14 @@ class AdvancedcontrolWidget(BoxLayout):
             self.grid_bg = RoundedRectangle(pos=self.grid_area.pos, size=self.grid_area.size, radius=[0, 0, 7, 7])
         self.grid_area.bind(pos=self.update_grid_bg, size=self.update_grid_bg)
 
-        
         # ── 중앙 파란 박스 ──
-        blue_box = BoxLayout(orientation='horizontal', padding=(10,10), spacing=10, size_hint=(0.95, 0.35), pos_hint={'center_x':0.5, 'center_y':0.5})
+        blue_box = BoxLayout(orientation='horizontal', padding=(10,10), spacing=10,
+                             size_hint=(0.95, 0.35), pos_hint={'center_x':0.5, 'center_y':0.5})
         with blue_box.canvas.before:
             Color(0.67, 0.77, 1.0, 1)  # AAC4FF
             blue_box_bg = RoundedRectangle(pos=blue_box.pos, size=blue_box.size, radius=[10])
         blue_box.bind(pos=lambda *a: setattr(blue_box_bg, 'pos', blue_box.pos),
-                    size=lambda *a: setattr(blue_box_bg, 'size', blue_box.size))
+                      size=lambda *a: setattr(blue_box_bg, 'size', blue_box.size))
 
         # ── content_box ──
         content_box = BoxLayout(orientation='vertical', size_hint_x=0.6, spacing=5)
@@ -52,24 +56,30 @@ class AdvancedcontrolWidget(BoxLayout):
             label2.font_size = blue_box.height * 0.18
         blue_box.bind(size=update_font_size)
 
-    
-        # ── temp_box ──
+        # ── temp_box (GO 버튼이 들어가는 박스) ──
         temp_box = FloatLayout(size_hint=(0.2, 1))
         with temp_box.canvas.before:
             Color(177/255, 178/255, 1, 1)  # B1B2FF
             temp_box_bg = RoundedRectangle(pos=temp_box.pos, size=temp_box.size, radius=[7])
         temp_box.bind(pos=lambda *a: setattr(temp_box_bg, 'pos', temp_box.pos),
-                    size=lambda *a: setattr(temp_box_bg, 'size', temp_box.size))
+                      size=lambda *a: setattr(temp_box_bg, 'size', temp_box.size))
 
-        go_btn = Button(text='GO!',bold=True,
+        # ── GO 버튼 ──
+        go_btn = Button(text='GO!', bold=True,
                         size_hint=(0.7, 0.7),
                         pos_hint={'center_x':0.5, 'center_y':0.5},
                         background_normal='',
                         background_color=(177/255, 178/255, 1, 1),
                         color=(1,1,1,1))
+
         def update_go_font_size(*args):
             go_btn.font_size = go_btn.height * 0.5
         go_btn.bind(size=update_go_font_size)
+
+        # ✅ GO 버튼 클릭 → ScreenManager 이동
+        def go_to_mainlayout(instance):
+            self.manager.current = 'Advanced_mainlayout'  # → 이동할 screen name
+        go_btn.bind(on_release=go_to_mainlayout)
 
         temp_box.add_widget(go_btn)
 
@@ -77,15 +87,19 @@ class AdvancedcontrolWidget(BoxLayout):
         blue_box.add_widget(content_box)
         blue_box.add_widget(temp_box)
 
-
+        # ── grid_area에 blue_box 추가 ──
         self.grid_area.add_widget(blue_box)
 
-        self.add_widget(self.header)
-        self.add_widget(self.grid_area)
+        # ── main_layout 조립 ──
+        main_layout.add_widget(self.header)
+        main_layout.add_widget(self.grid_area)
 
+        self.add_widget(main_layout)  # Screen에 main_layout 추가
+
+    # ── 위치/크기 업데이트 ──
     def update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
+        self.bg.pos = self.children[0].pos
+        self.bg.size = self.children[0].size
 
     def update_header(self, *args):
         self.header_bg.pos = self.header.pos
