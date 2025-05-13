@@ -39,10 +39,8 @@ class AdvancedMainLayout(Screen):
         right_box.bind(pos=lambda *a: setattr(right_box_bg, 'pos', right_box.pos),
                        size=lambda *a: setattr(right_box_bg, 'size', right_box.size))
 
-        # ScrollView 안에 BoxLayout
-        scrollview = ScrollView(size_hint=(1, 1))
-        right_inner = BoxLayout(orientation='vertical', padding=10, spacing=10, size_hint_y=None)
-        right_inner.bind(minimum_height=right_inner.setter('height'))
+        # ScrollView와 관련된 코드 제거, right_inner를 바로 right_box에 추가
+        right_inner = BoxLayout(orientation='vertical', padding=10, spacing=10, size_hint=(1,0.5))
 
         # 텍스트 항목 추가
         items = [
@@ -51,9 +49,8 @@ class AdvancedMainLayout(Screen):
             ("Low-level robot control", "Try manually controlling the robot's start and stop times."),
             ("Obstacle rearrangement", "Relocate the grid obstacles and manually define the accessible area.")
         ]
-
         for title, desc in items:
-            item_box = BoxLayout(orientation='vertical', size_hint_y=None, height=70)
+            item_box = BoxLayout(orientation='vertical', size_hint_y=0.5)
             title_label = Label(text=f"[b]{title}[/b]", markup=True, color=(1, 1, 1, 1), halign='left', valign='middle')
             desc_label = Label(text=desc, color=(1, 1, 1, 0.7), halign='left', valign='top')
 
@@ -83,12 +80,12 @@ class AdvancedMainLayout(Screen):
 
         right_inner.add_widget(main_button)
 
-        scrollview.add_widget(right_inner)
-        right_box.add_widget(scrollview)
+        right_box.add_widget(right_inner)
 
         # 작은 버튼 (EXIT) → 최상위 FloatLayout로 이동
         small_button = Button(
-            text='EXIT', size_hint=(0.08, 0.05),
+            text='[b]EXIT[/b]', markup = True,
+            size_hint=(0.08, 0.05),
             pos_hint={'right': 0.98, 'y': 0.02},
             background_normal='', background_color=(115 / 255, 103 / 255, 239 / 255, 1),
             color=(1, 1, 1, 1)
