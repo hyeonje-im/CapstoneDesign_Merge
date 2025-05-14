@@ -42,6 +42,37 @@ class MainScreen(Screen):
                        size=lambda *a: setattr(right_bg, 'size', right_box.size))
 
 
+        # 오른쪽 박스 안의 내용 구성
+        right_content = BoxLayout(orientation='vertical',size_hint=(0.9, 0.4))
+        
+
+        # 제목 라벨
+        title_label = Label(
+            text='[b]Low-level robot control[/b]',
+            markup=True,
+            color=(1, 1, 1, 1),
+            font_size=16,
+            
+            height=30
+        )
+
+        # 설명 라벨
+        desc_label = Label(
+            text="To place an obstacle, choose the black square and click or drag on the grid.\n"
+                "To remove one, choose the white square and click or drag on the grid.",
+            color=(1, 1, 1, 1),
+            halign='left',
+            valign='top',
+            text_size=(200, None),
+            
+        )
+        desc_label.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+
+        right_content.add_widget(title_label)
+        right_content.add_widget(desc_label)
+        right_box.add_widget(right_content)
+
+
         # 3. 하단 박스
         bottom_box = FloatLayout(size_hint=(0.8, 0.25), pos_hint={'x': 0, 'y': 0})
         with bottom_box.canvas.before:
