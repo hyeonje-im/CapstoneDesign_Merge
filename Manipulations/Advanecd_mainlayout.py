@@ -1,11 +1,17 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from kivy.uix.screenmanager import Screen
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.label import Label
-from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from kivy.uix.button import Button
+from Manipulations.first_introduction import introductions
+
+
 
 class AdvancedMainLayout(Screen):
     def __init__(self, **kwargs):
@@ -30,6 +36,7 @@ class AdvancedMainLayout(Screen):
         # 전체 레이아웃
         layout = FloatLayout()
 
+        
         # 오른쪽 박스 (AnchorLayout)
         right_box = AnchorLayout(anchor_x='center', anchor_y='top',
                                  size_hint=(0.2, 0.95), pos_hint={'right': 1, 'y': 0})
@@ -42,26 +49,8 @@ class AdvancedMainLayout(Screen):
         # ScrollView와 관련된 코드 제거, right_inner를 바로 right_box에 추가
         right_inner = BoxLayout(orientation='vertical', padding=10, spacing=10, size_hint=(1,0.5))
 
-        # 텍스트 항목 추가
-        items = [
-            ("Obstacle rearrangement", "Relocate the grid obstacles and manually define the accessible area."),
-            ("Robot's goal positions setting", "Relocate the grid obstacles and manually define the accessible area."),
-            ("Low-level robot control", "Try manually controlling the robot's start and stop times."),
-            ("Obstacle rearrangement", "Relocate the grid obstacles and manually define the accessible area.")
-        ]
-        for title, desc in items:
-            item_box = BoxLayout(orientation='vertical', size_hint_y=0.5)
-            title_label = Label(text=f"[b]{title}[/b]", markup=True, color=(1, 1, 1, 1), halign='left', valign='middle')
-            desc_label = Label(text=desc, color=(1, 1, 1, 0.7), halign='left', valign='top')
-
-            title_label.bind(size=lambda inst, *a: setattr(inst, 'text_size', inst.size))
-            desc_label.bind(size=lambda inst, *a: setattr(inst, 'text_size', inst.size))
-
-            item_box.add_widget(title_label)
-            item_box.add_widget(desc_label)
-            right_inner.add_widget(item_box)
-        
-        
+        for item in introductions():
+            right_inner.add_widget(item)
         main_button = Button(
             text='[b]Get Started[/b]', markup=True,
             size_hint_y=None, height=50,
@@ -69,6 +58,8 @@ class AdvancedMainLayout(Screen):
             color=(1, 1, 1, 1)
         )
 
+        main_button.bind(on_press = self.Low_level_control)
+        
         # 라운딩 효과 추가
         with main_button.canvas.before:
             Color(115 / 255, 103 / 255, 239 / 255, 1)
@@ -104,7 +95,7 @@ class AdvancedMainLayout(Screen):
         layout.add_widget(right_box)
         layout.add_widget(small_button)
         layout.add_widget(self.header)
-
+        
         self.add_widget(layout)
 
     def update_bg(self, *args):
@@ -114,3 +105,6 @@ class AdvancedMainLayout(Screen):
     def update_header_bg(self, *args):
         self.header_bg.pos = self.header.pos
         self.header_bg.size = self.header.size
+
+    def Low_level_control(self, instance):
+        self.manager.current = 'Low_level_control'
