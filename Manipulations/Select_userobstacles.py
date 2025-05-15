@@ -18,11 +18,11 @@ class SelectUserObstacles(BoxLayout):
         self.bind(pos=self.update_bg, size=self.update_bg)
 
         # 상단 박스
-        top_bar = self._create_plain_box(size_hint = (1,0.2))
+        top_bar = self._create_plain_box(size_hint = (1,0.15))
         self.add_widget(top_bar)
 
         # 중간 2박스 영역 (수평 박스)
-        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.8))
+        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.85))
         for _ in range(2):
             middle_bar.add_widget(self._create_plain_box())
         self.add_widget(middle_bar)
