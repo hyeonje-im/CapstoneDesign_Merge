@@ -3,11 +3,11 @@ from kivy.uix.widget import Widget
 from kivy.graphics import Color, Rectangle, RoundedRectangle, Line
 
 
-class SelectGoalPositions(BoxLayout):
+class SelectUserObstacles(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.size_hint = (0.65, 1)
-        self.pos_hint = {'right': 1}
+        self.size_hint = (0.35, 1)
+        self.pos_hint = {'left': 1}
         self.padding = [10, 10, 10, 10]
         self.orientation = 'vertical'
         
@@ -21,15 +21,12 @@ class SelectGoalPositions(BoxLayout):
         top_bar = self._create_plain_box(size_hint = (1,0.2))
         self.add_widget(top_bar)
 
-        # 중간 4박스 영역 (수평 박스)
-        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.7))
-        for _ in range(4):
+        # 중간 2박스 영역 (수평 박스)
+        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.8))
+        for _ in range(2):
             middle_bar.add_widget(self._create_plain_box())
         self.add_widget(middle_bar)
 
-        # 하단단 박스
-        bottom_bar = self._create_plain_box(size_hint = (1,0.1))
-        self.add_widget(bottom_bar)
         
     def _create_plain_box(self, **kwargs):
         box = Widget(**kwargs)

@@ -6,7 +6,8 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from Manipulations.Grid_map import GridMap
-
+from Manipulations.Select_goalpositions import SelectGoalPositions
+from Manipulations.Select_userobstacles import SelectUserObstacles
 
 class MainScreen(Screen):
     def __init__(self, **kwargs):
@@ -42,46 +43,6 @@ class MainScreen(Screen):
                        size=lambda *a: setattr(right_bg, 'size', right_box.size))
 
 
-        # 오른쪽 박스 안의 내용 구성
-        right_content = BoxLayout(orientation='vertical',size_hint=(0.9, 0.4), spacing=20)
-        
-
-        # 제목 라벨
-        title_label = Label(
-            text='[b]Low-level robot control[/b]',
-            markup=True,
-            color=(1, 1, 1, 1),
-            font_size=18,
-            
-            height=30
-        )
-        title_label.bind(
-            size=lambda inst, val: setattr(inst, 'text_size', val)
-        )
-
-        # 설명 라벨
-        desc_label = Label(
-            text="To place an obstacle, choose the black square and click or drag on the grid.\n"
-                "To remove one, choose the white square and click or drag on the grid.",
-            color=(1, 1, 1, 1),
-            halign='left',
-            valign='top',
-            size_hint=(1, None),
-            text_size=(self.width*0.9, None),
-            
-        )
-        desc_label.bind(
-            size=lambda inst, val: setattr(inst, 'text_size', val)
-        )
-        desc_label.bind(
-            texture_size=lambda inst, val: setattr(inst, 'height', val[1])
-        )
-
-               
-        right_content.add_widget(title_label)
-        right_content.add_widget(desc_label)
-        right_box.add_widget(right_content)
-
 
         # 3. 하단 박스
         bottom_box = FloatLayout(size_hint=(0.8, 0.25), pos_hint={'x': 0, 'y': 0})
@@ -91,6 +52,24 @@ class MainScreen(Screen):
         bottom_box.bind(pos=lambda *a: setattr(bottom_bg, 'pos', bottom_box.pos),
                         size=lambda *a: setattr(bottom_bg, 'size', bottom_box.size))
 
+        goal_positions = SelectGoalPositions(
+            size_hint=(0.65, 1),  # 하단 박스 크기 기준 너비 65%, 높이 100%
+            pos_hint={'right': 1, 'y': 0.05 },
+            height = bottom_box.height - 20,
+              # 오른쪽 정렬
+        )
+
+        user_obstacles = SelectUserObstacles(
+            size_hint=(0.35, 1),  # 하단 박스 크기 기준 너비 35%, 높이 100%
+            pos_hint={'left': 1, 'y': 0.05},
+            height = bottom_box.height - 20,
+              # 왼쪽 정렬
+        )
+
+        bottom_box.add_widget(user_obstacles)
+        bottom_box.add_widget(goal_positions)
+        
+        
         # 4. 그리드 맵 추가
         grid_map = GridMap()
         
