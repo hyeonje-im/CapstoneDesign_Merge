@@ -43,7 +43,7 @@ class MainScreen(Screen):
 
 
         # 오른쪽 박스 안의 내용 구성
-        right_content = BoxLayout(orientation='vertical',size_hint=(0.9, 0.4))
+        right_content = BoxLayout(orientation='vertical',size_hint=(0.9, 0.4), spacing=20)
         
 
         # 제목 라벨
@@ -51,9 +51,12 @@ class MainScreen(Screen):
             text='[b]Low-level robot control[/b]',
             markup=True,
             color=(1, 1, 1, 1),
-            font_size=16,
+            font_size=18,
             
             height=30
+        )
+        title_label.bind(
+            size=lambda inst, val: setattr(inst, 'text_size', val)
         )
 
         # 설명 라벨
@@ -63,11 +66,18 @@ class MainScreen(Screen):
             color=(1, 1, 1, 1),
             halign='left',
             valign='top',
-            text_size=(200, None),
+            size_hint=(1, None),
+            text_size=(self.width*0.9, None),
             
         )
-        desc_label.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+        desc_label.bind(
+            size=lambda inst, val: setattr(inst, 'text_size', val)
+        )
+        desc_label.bind(
+            texture_size=lambda inst, val: setattr(inst, 'height', val[1])
+        )
 
+               
         right_content.add_widget(title_label)
         right_content.add_widget(desc_label)
         right_box.add_widget(right_content)
