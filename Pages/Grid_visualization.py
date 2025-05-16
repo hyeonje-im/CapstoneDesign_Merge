@@ -16,15 +16,15 @@ class GridVisualizationWidget(BoxLayout):
         # ── 상단 바 ──
         self.header = BoxLayout(size_hint_y=None, height=40)
         with self.header.canvas.before:
-            Color(0.667, 0.769, 1.0, 1) 
+            Color(115 / 255, 103 / 255, 239 / 255, 1)
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[7, 7, 0, 0])
         self.header.bind(pos=self.update_header, size=self.update_header)
-        self.header.add_widget(Label(text="Grid Visualization", bold=True, color=(0, 0, 0, 1)))
+        self.header.add_widget(Label(text="Grid Visualization", bold=True, color=(1, 1, 1, 1)))
 
         # ── 아래 빈 흰 공간 ──
         self.grid_area = Widget()
         with self.grid_area.canvas.before:
-            Color(1, 1, 1, 1)
+            Color(37 / 255, 40 / 255, 59 / 255, 1)
             self.grid_bg = RoundedRectangle(pos=self.grid_area.pos, size=self.grid_area.size, radius=[0, 0, 7, 7])
         self.grid_area.bind(pos=self.update_grid_bg, size=self.update_grid_bg)
 

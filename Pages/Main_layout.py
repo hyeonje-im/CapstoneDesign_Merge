@@ -19,7 +19,7 @@ class ColoredScreen(Screen):
         super().__init__(**kwargs)
 
         with self.canvas.before:
-            Color(238/255, 241/255, 255/255, 1)  # EEF1FF
+            Color(37 / 255, 40 / 255, 59 / 255, 1)  # EEF1FF
             self.bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self.update_bg, size=self.update_bg)
 
@@ -40,7 +40,7 @@ class ColoredScreen(Screen):
         self.bottom_panel.pos_hint = {"x": 15 / 1210, "y": 15 / 838}
 
         with self.bottom_panel.canvas.before:
-            Color(210/255, 218/255, 255/255, 1)
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
             self.bottom_rect = RoundedRectangle(pos=self.bottom_panel.pos, size=self.bottom_panel.size, radius=[7])
 
         self.bottom_panel.bind(pos=self.update_bottom_rect, size=self.update_bottom_rect)

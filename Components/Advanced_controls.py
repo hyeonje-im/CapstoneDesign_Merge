@@ -17,31 +17,31 @@ class AdvancedcontrolWidget(BoxLayout):  # ✅ BoxLayout 상속
         # ── 상단 바
         self.header = BoxLayout(size_hint_y=None, height=40)
         with self.header.canvas.before:
-            Color(0.667, 0.769, 1.0, 1)  # AAC4FF
+            Color(115 / 255, 103 / 255, 239 / 255, 1)
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[7, 7, 0, 0])
         self.header.bind(pos=self.update_header, size=self.update_header)
-        self.header.add_widget(Label(text="Advanced Controls", bold=True, color=(0, 0, 0, 1)))
+        self.header.add_widget(Label(text="Advanced Controls", bold=True, color=(1, 1, 1, 1)))
 
-        # ── 아래 흰 공간
+        # ── 아래 공간
         self.grid_area = FloatLayout()
         with self.grid_area.canvas.before:
-            Color(1, 1, 1, 1)
+            Color(37 / 255, 40 / 255, 59 / 255, 1)
             self.grid_bg = RoundedRectangle(pos=self.grid_area.pos, size=self.grid_area.size, radius=[0, 0, 7, 7])
         self.grid_area.bind(pos=self.update_grid_bg, size=self.update_grid_bg)
 
-        # ── 중앙 파란 박스
+        # ── 중앙 박스
         blue_box = BoxLayout(orientation='horizontal', padding=(10,10), spacing=10,
                              size_hint=(0.95, 0.35), pos_hint={'center_x':0.5, 'center_y':0.5})
         with blue_box.canvas.before:
-            Color(0.67, 0.77, 1.0, 1)  # AAC4FF
+            Color(46 / 255, 51 / 255, 73 / 255, 1)  # AAC4FF
             blue_box_bg = RoundedRectangle(pos=blue_box.pos, size=blue_box.size, radius=[10])
         blue_box.bind(pos=lambda *a: setattr(blue_box_bg, 'pos', blue_box.pos),
                       size=lambda *a: setattr(blue_box_bg, 'size', blue_box.size))
 
         # ── content_box
         content_box = BoxLayout(orientation='vertical', size_hint_x=0.6, spacing=5)
-        label1 = Label(text='[b]Select control components[/b]', markup=True, color=(0,0,0,1))
-        label2 = Label(text="You can manually place obstacles \nand control the robot's goal position.", color=(0,0,0,0.5))
+        label1 = Label(text='[b]Select control components[/b]', markup=True, color=(1,1,1,1))
+        label2 = Label(text="You can manually place obstacles \nand control the robot's goal position.", color=(1,1,1,0.5))
         content_box.add_widget(label1)
         content_box.add_widget(label2)
 

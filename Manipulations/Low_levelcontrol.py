@@ -6,7 +6,7 @@ from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.graphics import Color, Rectangle, RoundedRectangle
 from Manipulations.Grid_map import GridMap
-from Manipulations.Select_goalpositions import SelectGoalPositions
+from Manipulations.Select_goalpositions import RobotGoalBox, SelectGoalPositions
 from Manipulations.Select_userobstacles import SelectUserObstacles
 
 class MainScreen(Screen):
@@ -52,7 +52,7 @@ class MainScreen(Screen):
         bottom_box.bind(pos=lambda *a: setattr(bottom_bg, 'pos', bottom_box.pos),
                         size=lambda *a: setattr(bottom_bg, 'size', bottom_box.size))
 
-        goal_positions = SelectGoalPositions(
+        goal_positions = RobotGoalBox(
             size_hint=(0.65, 1),  # 하단 박스 크기 기준 너비 65%, 높이 100%
             pos_hint={'right': 1, 'y': 0.05 },
             height = bottom_box.height - 20,

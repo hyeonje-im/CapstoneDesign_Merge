@@ -16,17 +16,17 @@ class WarpedperspectiveWidget(BoxLayout):
         self.header = BoxLayout(size_hint_y=None, height=40)
         self.header.canvas.before.clear()
         with self.header.canvas.before:
-            Color(0.694, 0.698, 1.0, 1)  # B1B2FF
+            Color(115 / 255, 103 / 255, 239 / 255, 1)
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[7, 7, 0, 0])
         self.header.bind(pos=self.update_header, size=self.update_header)
-        self.header.add_widget(Label(text="Warped Perspective",bold=True, color=(0, 0, 0, 1)))
+        self.header.add_widget(Label(text="Warped Perspective",bold=True, color=(1, 1, 1, 1)))
 
        
 
     # ── 영상 영역 ──
         self.video_area = Widget()
         with self.video_area.canvas.before:
-            Color(1, 1, 1, 1)  # FFFFFF
+            Color(46 / 255, 51 / 255, 73 / 255, 1)   
             self.video_bg = RoundedRectangle(pos=self.video_area.pos, size=self.video_area.size, radius=[0, 0, 7, 7])
         self.video_area.bind(pos=self.update_video_bg, size=self.update_video_bg)
 
