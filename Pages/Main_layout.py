@@ -25,19 +25,19 @@ class ColoredScreen(Screen):
 
         # ── VideoCaptureWidget 배치 ──
         vc = VideoCaptureWidget()
-        vc.size_hint = (500 / 1210, 500 / 838)
-        vc.pos_hint = {"x": 83 / 1210, "y": 283 / 838}
+        vc.size_hint = (590 / 1210, 540 / 838)
+        vc.pos_hint = {"x": 10 / 1210, "y": 283 / 838}
         self.add_widget(vc)
 
         wp = WarpedperspectiveWidget()
-        wp.size_hint = (500 / 1210, 500 / 838)
-        wp.pos_hint = {"x": 625 / 1210, "y": 283 / 838}
+        wp.size_hint = (590 / 1210, 540 / 838)
+        wp.pos_hint = {"x": 610 / 1210, "y": 283 / 838}
         self.add_widget(wp)
 
         # ── 하단 패널 ──
         self.bottom_panel = BoxLayout(orientation='horizontal', spacing=10, padding=10)
-        self.bottom_panel.size_hint = (1180 / 1210, 250 / 838)
-        self.bottom_panel.pos_hint = {"x": 15 / 1210, "y": 15 / 838}
+        self.bottom_panel.size_hint = (1190 / 1210, 250 / 838)
+        self.bottom_panel.pos_hint = {"x": 10 / 1210, "y": 15 / 838}
 
         with self.bottom_panel.canvas.before:
             Color(46 / 255, 51 / 255, 73 / 255, 1)

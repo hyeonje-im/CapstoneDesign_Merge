@@ -10,21 +10,21 @@ class TagsInfoWidget(BoxLayout):
 
         # 전체 배경
         with self.canvas.before:
-            Color(0.823, 0.855, 1.0, 1)  # D2DAFF
+            Color(37 / 255, 40 / 255, 59 / 255, 1)  
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[10])
         self.bind(pos=self.update_bg, size=self.update_bg)
 
         # ── view_all_btn → 라운드된 흰색 박스 안에 라벨 ──
         view_all_container = FloatLayout(size_hint_y=None, height=30)
         with view_all_container.canvas.before:
-            Color(0.933, 0.945, 1.0, 1)
+            Color(115 / 255, 103 / 255, 239 / 255, 1)
             view_all_container.bg = RoundedRectangle(pos=view_all_container.pos, size=view_all_container.size, radius=[7])
         view_all_container.bind(pos=lambda *a: setattr(view_all_container.bg, 'pos', view_all_container.pos),
                                 size=lambda *a: setattr(view_all_container.bg, 'size', view_all_container.size))
 
         view_all_label = Label(
             text='View all Tags',
-            color=(0, 0, 0, 1),
+            color=(1, 1, 1, 1),
             bold=True,
             font_size=15,
             pos_hint={'center_x': 0.5, 'center_y': 0.5}  # ★ 중앙 정렬!
@@ -33,10 +33,10 @@ class TagsInfoWidget(BoxLayout):
         view_all_container.add_widget(view_all_label)
 
 
-        # ── AAC4FF 컬러의 박스 ──
+        # 태그 이미지 박스 ──
         aac4ff_box = BoxLayout(orientation='vertical', padding=5, spacing=5)
         with aac4ff_box.canvas.before:
-            Color(0.67, 0.77, 1.0, 1)  # AAC4FF
+            Color(46 / 255, 51 / 255, 73 / 255, 1) 
             aac4ff_box.bg = RoundedRectangle(pos=aac4ff_box.pos, size=aac4ff_box.size, radius=[7])
         aac4ff_box.bind(pos=lambda *a: setattr(aac4ff_box.bg, 'pos', aac4ff_box.pos),
                         size=lambda *a: setattr(aac4ff_box.bg, 'size', aac4ff_box.size))
@@ -58,7 +58,7 @@ class TagsInfoWidget(BoxLayout):
                            size=lambda *a: setattr(center_widget.bg, 'size', center_widget.size))
 
         left_btn = Button(
-            text='<',
+            text='<', bold=True,
             size_hint=(None, None), size=(30, 30),
             pos_hint={'x': 0, 'center_y': 0.5},
             background_normal='',
@@ -66,7 +66,7 @@ class TagsInfoWidget(BoxLayout):
             color=(0, 0, 0, 1)
         )
         right_btn = Button(
-            text='>',
+            text='>', bold=True,
             size_hint=(None, None), size=(30, 30),
             pos_hint={'right': 1, 'center_y': 0.5},
             background_normal='',
@@ -80,20 +80,20 @@ class TagsInfoWidget(BoxLayout):
         aac4ff_box.add_widget(label)
         aac4ff_box.add_widget(center_widget)
 
-        # ── tag_num_btn → 라운드된 흰색 박스 안에 라벨 ──
+        # ── tag_num_btn → 박스 안에 라벨 ──
         tag_num_container = FloatLayout(size_hint_y=None, height=30)
         with tag_num_container.canvas.before:
-            Color(0.933, 0.945, 1.0, 1)
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
             tag_num_container.bg = RoundedRectangle(pos=tag_num_container.pos, size=tag_num_container.size, radius=[7])
         tag_num_container.bind(pos=lambda *a: setattr(tag_num_container.bg, 'pos', tag_num_container.pos),
                             size=lambda *a: setattr(tag_num_container.bg, 'size', tag_num_container.size))
 
         tag_num_label = Label(
             text='Tag number',
-            color=(0, 0, 0, 1),
+            color=(1, 1, 1, 1),
             bold=True,
             font_size=15,
-            pos_hint={'center_x': 0.5, 'center_y': 0.5}  # ★ 중앙 정렬!
+            pos_hint={'center_x': 0.5, 'center_y': 0.5} #중앙 정렬렬
         )
 
         tag_num_container.add_widget(tag_num_label)

@@ -29,16 +29,21 @@ class AdvancedcontrolWidget(BoxLayout):  # ✅ BoxLayout 상속
             self.grid_bg = RoundedRectangle(pos=self.grid_area.pos, size=self.grid_area.size, radius=[0, 0, 7, 7])
         self.grid_area.bind(pos=self.update_grid_bg, size=self.update_grid_bg)
 
-        # ── 중앙 박스
-        blue_box = BoxLayout(orientation='horizontal', padding=(10,10), spacing=10,
-                             size_hint=(0.95, 0.35), pos_hint={'center_x':0.5, 'center_y':0.5})
-        with blue_box.canvas.before:
-            Color(46 / 255, 51 / 255, 73 / 255, 1)  # AAC4FF
-            blue_box_bg = RoundedRectangle(pos=blue_box.pos, size=blue_box.size, radius=[10])
-        blue_box.bind(pos=lambda *a: setattr(blue_box_bg, 'pos', blue_box.pos),
-                      size=lambda *a: setattr(blue_box_bg, 'size', blue_box.size))
+                # ── blue_box들을 수직으로 정렬할 컨테이너
+        box_container = BoxLayout(orientation='vertical',
+                                  spacing=10,
+                                  size_hint=(0.95, 0.95),
+                                  pos_hint={'center_x': 0.5, 'center_y': 0.5})
 
-        # ── content_box
+        # ✅ [1] 첫 번째 blue_box 
+        blue_box1 = BoxLayout(orientation='horizontal', padding=10, spacing=10,
+                              size_hint=(1, 1/3))
+        with blue_box1.canvas.before:
+            Color(46 / 255, 51 / 255, 73 / 255, 1)  
+            blue_box1_bg = RoundedRectangle(pos=blue_box1.pos, size=blue_box1.size, radius=[10])
+        blue_box1.bind(pos=lambda *a: setattr(blue_box1_bg, 'pos', blue_box1.pos),
+                       size=lambda *a: setattr(blue_box1_bg, 'size', blue_box1.size))
+
         content_box = BoxLayout(orientation='vertical', size_hint_x=0.6, spacing=5)
         label1 = Label(text='[b]Select control components[/b]', markup=True, color=(1,1,1,1))
         label2 = Label(text="You can manually place obstacles \nand control the robot's goal position.", color=(1,1,1,0.5))
@@ -46,42 +51,56 @@ class AdvancedcontrolWidget(BoxLayout):  # ✅ BoxLayout 상속
         content_box.add_widget(label2)
 
         def update_font_size(*args):
-            label1.font_size = blue_box.height * 0.25
-            label2.font_size = blue_box.height * 0.18
-        blue_box.bind(size=update_font_size)
+            label1.font_size = blue_box1.height * 0.25
+            label2.font_size = blue_box1.height * 0.18
+        blue_box1.bind(size=update_font_size)
 
-        # ── temp_box
-        temp_box = FloatLayout(size_hint=(0.2, 1))
-        with temp_box.canvas.before:
-            Color(177/255, 178/255, 1, 1)  # B1B2FF
-            temp_box_bg = RoundedRectangle(pos=temp_box.pos, size=temp_box.size, radius=[7])
-        temp_box.bind(pos=lambda *a: setattr(temp_box_bg, 'pos', temp_box.pos),
-                      size=lambda *a: setattr(temp_box_bg, 'size', temp_box.size))
+        temp_box1 = FloatLayout(size_hint=(0.2, 1))
+        with temp_box1.canvas.before:
+            Color(177/255, 178/255, 1, 1)
+            temp_box1_bg = RoundedRectangle(pos=temp_box1.pos, size=temp_box1.size, radius=[7])
+        temp_box1.bind(pos=lambda *a: setattr(temp_box1_bg, 'pos', temp_box1.pos),
+                       size=lambda *a: setattr(temp_box1_bg, 'size', temp_box1.size))
 
-        # ── GO 버튼
         go_btn = Button(text='GO!', bold=True,
                         size_hint=(0.7, 0.7),
                         pos_hint={'center_x':0.5, 'center_y':0.5},
                         background_normal='',
                         background_color=(177/255, 178/255, 1, 1),
                         color=(1,1,1,1))
-
-        def update_go_font_size(*args):
-            go_btn.font_size = go_btn.height * 0.5
-        go_btn.bind(size=update_go_font_size)
-
-        # ✅ GO 버튼 클릭 시 → 전달받은 콜백 실행
+        go_btn.bind(size=lambda *_: setattr(go_btn, 'font_size', go_btn.height * 0.5))
         if on_go:
             go_btn.bind(on_release=on_go)
 
-        temp_box.add_widget(go_btn)
+        temp_box1.add_widget(go_btn)
+        blue_box1.add_widget(content_box)
+        blue_box1.add_widget(temp_box1)
 
-        # ── blue_box에 추가
-        blue_box.add_widget(content_box)
-        blue_box.add_widget(temp_box)
+        # ✅ [2] 두 번째 blue_box (내용 없음)
+        blue_box2 = BoxLayout(orientation='horizontal', padding=10, spacing=10,
+                              size_hint=(1, 1/3))
+        with blue_box2.canvas.before:
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
+            blue_box2_bg = RoundedRectangle(pos=blue_box2.pos, size=blue_box2.size, radius=[10])
+        blue_box2.bind(pos=lambda *a: setattr(blue_box2_bg, 'pos', blue_box2.pos),
+                       size=lambda *a: setattr(blue_box2_bg, 'size', blue_box2.size))
 
-        # ── grid_area에 blue_box 추가
-        self.grid_area.add_widget(blue_box)
+        # ✅ [3] 세 번째 blue_box (내용 없음)
+        blue_box3 = BoxLayout(orientation='horizontal', padding=10, spacing=10,
+                              size_hint=(1, 1/3))
+        with blue_box3.canvas.before:
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
+            blue_box3_bg = RoundedRectangle(pos=blue_box3.pos, size=blue_box3.size, radius=[10])
+        blue_box3.bind(pos=lambda *a: setattr(blue_box3_bg, 'pos', blue_box3.pos),
+                       size=lambda *a: setattr(blue_box3_bg, 'size', blue_box3.size))
+
+        # ── 추가
+        box_container.add_widget(blue_box1)
+        box_container.add_widget(blue_box2)
+        box_container.add_widget(blue_box3)
+
+        self.grid_area.add_widget(box_container)
+
 
         # ── self에 추가
         self.add_widget(self.header)

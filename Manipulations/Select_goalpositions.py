@@ -94,7 +94,15 @@ class SelectGoalPositions(BoxLayout):
         self.add_widget(top_bar)
 
         # 중간 4박스
-        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.75))
+        middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.75), spacing = 15,
+                               padding = [10, 10])
+        with middle_bar.canvas.before:
+            Color(37 / 255, 40 / 255, 59 / 255, 1)
+            middle_bar.bg = RoundedRectangle(pos=middle_bar.pos, size=middle_bar.size)
+            Color(0, 0, 0, 1)
+            middle_bar.border = Line(rectangle=(middle_bar.x, middle_bar.y, middle_bar.width, middle_bar.height), width=1)
+       
+       
         robot_colors = [
             ((178/255, 255/255, 177/255, 0.5), (178/255, 255/255, 177/255, 1)),
             ((254/255, 255/255, 179/255, 0.5), (254/255, 255/255, 179/255, 1)),

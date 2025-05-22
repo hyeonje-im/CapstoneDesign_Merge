@@ -21,7 +21,7 @@ class GridVisualizationWidget(BoxLayout):
         self.header.bind(pos=self.update_header, size=self.update_header)
         self.header.add_widget(Label(text="Grid Visualization", bold=True, color=(1, 1, 1, 1)))
 
-        # ── 아래 빈 흰 공간 ──
+        # ── 아래  공간 ──
         self.grid_area = Widget()
         with self.grid_area.canvas.before:
             Color(37 / 255, 40 / 255, 59 / 255, 1)
