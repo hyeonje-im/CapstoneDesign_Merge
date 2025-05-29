@@ -18,8 +18,8 @@ class GridMap(FloatLayout):
 
         # 2. 격자 박스 배경
         self.grid_container = FloatLayout(
-            size_hint=(0.79, 0.685),
-            pos_hint={'x': 0, 'y': 0.265}
+            size_hint=(0.79, 0.64),
+            pos_hint={'x': 0, 'y': 260 / 838}
         )
         with self.grid_container.canvas.before:
             Color(46 / 255, 51 / 255, 73 / 255, 1)

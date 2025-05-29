@@ -16,6 +16,7 @@ class MyScreenManager(ScreenManager):
         self.add_widget(ColoredScreen(name='colored_screen'))
         self.add_widget(AdvancedMainLayout(name='Advanced_mainlayout'))
         self.add_widget(MainScreen(name='Low_level_control'))
+        self.add_widget(ColoredScreen(name = 'Main_layout'))
 class MyApp(App):
     def build(self):
         return MyScreenManager()

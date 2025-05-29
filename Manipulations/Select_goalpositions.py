@@ -76,7 +76,7 @@ class SelectGoalPositions(BoxLayout):
         top_bar = BoxLayout(size_hint=(1, 0.15), orientation='horizontal')
         top_bar.bind(pos=self.update_inner_box, size=self.update_inner_box)
         with top_bar.canvas.before:
-            Color(37 / 255, 40 / 255, 59 / 255, 1)
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
             top_bar.bg = Rectangle(pos=top_bar.pos, size=top_bar.size)
             Color(0, 0, 0, 1)
             top_bar.border = Line(rectangle=(top_bar.x, top_bar.y, top_bar.width, top_bar.height), width=1)
@@ -85,7 +85,7 @@ class SelectGoalPositions(BoxLayout):
             text='[b]Select goal positions[/b]',
             markup=True,
             color=(1, 1, 1, 1),
-            halign='left',
+            halign='center',
             valign='middle',
             size_hint=(1, 1)
         )
@@ -97,7 +97,7 @@ class SelectGoalPositions(BoxLayout):
         middle_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.75), spacing = 15,
                                padding = [10, 10])
         with middle_bar.canvas.before:
-            Color(37 / 255, 40 / 255, 59 / 255, 1)
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
             middle_bar.bg = RoundedRectangle(pos=middle_bar.pos, size=middle_bar.size)
             Color(0, 0, 0, 1)
             middle_bar.border = Line(rectangle=(middle_bar.x, middle_bar.y, middle_bar.width, middle_bar.height), width=1)
@@ -120,7 +120,11 @@ class SelectGoalPositions(BoxLayout):
         # 하단 바
         bottom_bar = self._create_plain_box(size_hint=(1, 0.1))
         self.add_widget(bottom_bar)
-
+        with top_bar.canvas.before:
+            Color(46 / 255, 51 / 255, 73 / 255, 1)
+            bottom_bar.bg = Rectangle(pos=top_bar.pos, size=top_bar.size)
+    
+    
     def _create_plain_box(self, **kwargs):
         box = Widget(**kwargs)
         with box.canvas.before:

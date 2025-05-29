@@ -13,7 +13,7 @@ class WarpedperspectiveWidget(BoxLayout):
         self.bind(pos=self.update_bg, size=self.update_bg)
 
         # ── 상단 바 ──
-        self.header = BoxLayout(size_hint_y=None, height=40)
+        self.header = BoxLayout(size_hint_y=None, height=30)
         self.header.canvas.before.clear()
         with self.header.canvas.before:
             Color(115 / 255, 103 / 255, 239 / 255, 1)

@@ -25,13 +25,13 @@ class ColoredScreen(Screen):
 
         # ── VideoCaptureWidget 배치 ──
         vc = VideoCaptureWidget()
-        vc.size_hint = (590 / 1210, 540 / 838)
+        vc.size_hint = (755 / 1210, 540 / 838)
         vc.pos_hint = {"x": 10 / 1210, "y": 283 / 838}
         self.add_widget(vc)
 
         wp = WarpedperspectiveWidget()
-        wp.size_hint = (590 / 1210, 540 / 838)
-        wp.pos_hint = {"x": 610 / 1210, "y": 283 / 838}
+        wp.size_hint = (424 / 1210, 540 / 838)
+        wp.pos_hint = {"x": 775 / 1210, "y": 283 / 838}
         self.add_widget(wp)
 
         # ── 하단 패널 ──

@@ -21,7 +21,7 @@ class MainScreen(Screen):
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[0])
         self.header.bind(pos=self.update_header_bg, size=self.update_header_bg)
 
-        label = Label(text='[b]Advanced Controls[/b]', markup=True, color=(1, 1, 1, 1))
+        label = Label(text='[b]Low Level Cotrols[/b]', markup=True, color=(1, 1, 1, 1))
         self.header.add_widget(label)
 
         # 전체 레이아웃
@@ -42,10 +42,20 @@ class MainScreen(Screen):
         right_box.bind(pos=lambda *a: setattr(right_bg, 'pos', right_box.pos),
                        size=lambda *a: setattr(right_bg, 'size', right_box.size))
 
+        # # 오른쪽 박스 내부 장애물 위치 레이아웃
+        
+        # User_obs_layout = BoxLayout(orientation='vertical', size_hint=(1, 0.3), spacing = 10, padding=10)
+        # with User_obs_layout.canvas.before:
+        #     Color(37 / 255, 40 / 255, 59 / 255, 1)
+        #     right_bg = RoundedRectangle(pos=right_box.pos, size=right_box.size, radius=[5])
+        # right_box.bind(pos=lambda *a: setattr(right_bg, 'pos', right_box.pos),
+        #                size=lambda *a: setattr(right_bg, 'size', right_box.size))
 
+        
+        # right_box.add_widget(User_obs_layout)
 
         # 3. 하단 박스
-        bottom_box = FloatLayout(size_hint=(0.8, 0.25), pos_hint={'x': 0, 'y': 0})
+        bottom_box = FloatLayout(size_hint = (0.8, 250 / 838), pos_hint={'x': 0, 'y': 0})
         with bottom_box.canvas.before:
             Color(46 / 255, 51 / 255, 73 / 255, 1)
             bottom_bg = RoundedRectangle(pos=bottom_box.pos, size=bottom_box.size, radius=[0])
