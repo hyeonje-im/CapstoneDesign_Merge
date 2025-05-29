@@ -7,7 +7,7 @@ def introductions():
         ("Obstacle rearrangement", "Relocate the grid obstacles and manually define the accessible area."),
         ("Robot's goal positions setting", "Relocate the grid obstacles and manually define the accessible area."),
         ("Low-level robot control", "Try manually controlling the robot's start and stop times."),
-        ("Obstacle rearrangement", "Relocate the grid obstacles and manually define the accessible area.")
+        
     ]
 
     item_widgets = []

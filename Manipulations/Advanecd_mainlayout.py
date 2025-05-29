@@ -44,11 +44,11 @@ class AdvancedMainLayout(Screen):
 
         # 왼쪽: video_capture.py의 위젯
         
-        video_widget = VideoCaptureWidget(size_hint_x=0.5)
+        video_widget = VideoCaptureWidget(size_hint_x=0.62)
 
         # 오른쪽: grid_visualization.py의 위젯
         
-        grid_widget = GridVisualizationWidget(size_hint_x=0.5)
+        grid_widget = GridVisualizationWidget(size_hint_x=0.38)
 
         main_area.add_widget(video_widget)
         main_area.add_widget(grid_widget)

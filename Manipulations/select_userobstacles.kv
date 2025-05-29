@@ -1,0 +1,23 @@
+<SelectUserObstacles>:
+    orientation: 'vertical'
+    size_hint: 0.35, 1
+    pos_hint: {'left': 1}
+    padding: 10
+
+    # 상단 바
+    PlainBox:
+        size_hint: 1, 0.15
+        orientation: 'vertical'
+        Label:
+            text: "[b]Select Obstacles[b]"
+            markup: True
+            color: 1, 1, 1, 1
+            font_size: 15
+    
+    #중간 두 박스
+    BoxLayout:
+        orientation: 'horizontal'
+        size_hint: 1, 0.85
+
+        PlainBox:
+        

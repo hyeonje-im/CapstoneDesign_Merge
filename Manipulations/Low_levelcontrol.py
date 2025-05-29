@@ -8,6 +8,8 @@ from kivy.graphics import Color, Rectangle, RoundedRectangle
 from Manipulations.Grid_map import GridMap
 from Manipulations.Select_goalpositions import SelectGoalPositions
 from Manipulations.Select_userobstacles import SelectUserObstacles
+from Manipulations.RightBoxContents import RightBoxContents
+
 
 class MainScreen(Screen):
     def __init__(self, **kwargs):
@@ -42,18 +44,8 @@ class MainScreen(Screen):
         right_box.bind(pos=lambda *a: setattr(right_bg, 'pos', right_box.pos),
                        size=lambda *a: setattr(right_bg, 'size', right_box.size))
 
-        # # 오른쪽 박스 내부 장애물 위치 레이아웃
+        right_box.add_widget(RightBoxContents())
         
-        # User_obs_layout = BoxLayout(orientation='vertical', size_hint=(1, 0.3), spacing = 10, padding=10)
-        # with User_obs_layout.canvas.before:
-        #     Color(37 / 255, 40 / 255, 59 / 255, 1)
-        #     right_bg = RoundedRectangle(pos=right_box.pos, size=right_box.size, radius=[5])
-        # right_box.bind(pos=lambda *a: setattr(right_bg, 'pos', right_box.pos),
-        #                size=lambda *a: setattr(right_bg, 'size', right_box.size))
-
-        
-        # right_box.add_widget(User_obs_layout)
-
         # 3. 하단 박스
         bottom_box = FloatLayout(size_hint = (0.8, 250 / 838), pos_hint={'x': 0, 'y': 0})
         with bottom_box.canvas.before:
@@ -62,19 +54,8 @@ class MainScreen(Screen):
         bottom_box.bind(pos=lambda *a: setattr(bottom_bg, 'pos', bottom_box.pos),
                         size=lambda *a: setattr(bottom_bg, 'size', bottom_box.size))
 
-        goal_positions = SelectGoalPositions(
-            size_hint=(0.65, 1),  # 하단 박스 크기 기준 너비 65%, 높이 100%
-            pos_hint={'right': 1, 'y': 0.05 },
-            height = bottom_box.height - 20,
-              # 오른쪽 정렬
-        )
-
-        user_obstacles = SelectUserObstacles(
-            size_hint=(0.35, 1),  # 하단 박스 크기 기준 너비 35%, 높이 100%
-            pos_hint={'left': 1, 'y': 0.05},
-            height = bottom_box.height - 20,
-              # 왼쪽 정렬
-        )
+        goal_positions = SelectGoalPositions()
+        user_obstacles = SelectUserObstacles()
 
         bottom_box.add_widget(user_obstacles)
         bottom_box.add_widget(goal_positions)

@@ -1,0 +1,103 @@
+#:kivy 2.2.0
+
+<RightBoxContents>:
+    orientation: 'vertical'
+    padding: 10
+    spacing: 10
+    size_hint: 1, 0.9
+    pos_hint: {'top': 1}
+
+    # 설명 텍스트 박스
+    FloatLayout:
+        size_hint: 1, 0.2
+        canvas.before:
+            Color:
+                rgba: 37/255, 40/255, 59/255, 1
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [5]
+        Label:
+            text: "[b]Low-level robot control[/b]\\nTo place an obstacle, choose the black square and click or drag on the grid.\\nTo remove one, choose the white square and click or drag on the grid."
+            markup: True
+            color: 1, 1, 1, 1
+            size_hint: 1,1
+            text_size: self.width, self.height
+            halign: 'center'
+            valign: 'middle'
+            
+            
+
+    # 박스1
+    FloatLayout:
+        size_hint: 1, 0.35
+        canvas.before:
+            Color:
+                rgba: 37/255, 40/255, 59/255, 1
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [5]
+        BoxLayout:
+            size_hint: 1, None
+            height: 30
+            pos_hint: {'top': 1}
+            canvas.before:
+                Color:
+                    rgba: 115/255, 103/255, 239/255, 1
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [5, 5, 0, 0]
+
+    # 박스2
+    FloatLayout:
+        size_hint: 1, 0.35
+        canvas.before:
+            Color:
+                rgba: 37/255, 40/255, 59/255, 1
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [5]
+        BoxLayout:
+            size_hint: 1, None
+            height: 40
+            pos_hint: {'top': 1}
+            canvas.before:
+                Color:
+                    rgba: 115/255, 103/255, 239/255, 1
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [5, 5, 0, 0]
+
+        # 버튼 행
+        BoxLayout:
+            orientation: 'horizontal'
+            size_hint: 1, None
+            height: 30
+            spacing: 10
+            padding: 5
+            pos_hint: {'y': 0}
+            Button:
+                text: '[b]back[/b]'
+                markup: True
+                font_size: root.font_size
+                color: 1, 1, 1, 1
+                background_normal: ''
+                background_color: 115/255, 103/255, 239/255, 1
+            Button:
+                text: '[b]exit[/b]'
+                markup: True
+                font_size: root.font_size
+                color: 1, 1, 1, 1
+                background_normal: ''
+                background_color: 115/255, 103/255, 239/255, 1
+            Button:
+                text: '[b]apply[/b]'
+                markup: True
+                font_size: root.font_size
+                color: 1, 1, 1, 1
+                background_normal: ''
+                background_color: 115/255, 103/255, 239/255, 1

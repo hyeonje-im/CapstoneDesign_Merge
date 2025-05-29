@@ -14,7 +14,7 @@ class SystemstatusWidget(BoxLayout):
 
        
         # ── 상단 바 ──
-        self.header = BoxLayout(size_hint_y=None, height=40)
+        self.header = BoxLayout(size_hint_y=None, height=30)
         with self.header.canvas.before:
             Color(115 / 255, 103 / 255, 239 / 255, 1)
             self.header_bg = RoundedRectangle(pos=self.header.pos, size=self.header.size, radius=[7, 7, 0, 0])
