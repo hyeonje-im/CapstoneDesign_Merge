@@ -4,22 +4,19 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager
-from Pages.Main_layout import ColoredScreen  # ColoredScreen 파일명 맞게 임포트
-from Manipulations.Advanecd_mainlayout import AdvancedMainLayout  # AdvancedMainLayout 파일명 맞게 임포트
-from Manipulations.Low_levelcontrol import MainScreen  # MainScreen 파일명 맞게 임포트
+from kivy.uix.screenmanager import ScreenManager 
+from Main_pages2.Main_layout2 import MainLayout2
+from Utilities.UI_utilities import KLabel, KLine
 
 class MyScreenManager(ScreenManager):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
-        self.add_widget(ColoredScreen(name='colored_screen'))
-        self.add_widget(AdvancedMainLayout(name='Advanced_mainlayout'))
-        self.add_widget(MainScreen(name='Low_level_control'))
-        self.add_widget(ColoredScreen(name = 'Main_layout'))
+        self.add_widget(MainLayout2(name = 'Main_layout2')) # 1번 화면
 class MyApp(App):
     def build(self):
         return MyScreenManager()
+
+
 
 if __name__ == "__main__":
     MyApp().run()

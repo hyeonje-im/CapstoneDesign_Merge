@@ -11,7 +11,7 @@ from Pages.Warped_perspective import WarpedperspectiveWidget
 from Pages.Grid_visualization import GridVisualizationWidget 
 from Components.Tags_info import TagsInfoWidget
 from Components.System_status import SystemstatusWidget
-from Components.Advanced_controls import AdvancedcontrolWidget
+from Advanced_controls.Advanced_mainlayout import AdvancedcontrolWidget
 
 
 class ColoredScreen(Screen):
