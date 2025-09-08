@@ -1,0 +1,10 @@
+config
+ip 주소 바꿈
+
+command_transfer
+클래스 이름 바꿈
+
+mqtt_start
+subprocess.Popen([exe_path, "-c", conf_path, "-v"], cwd=r"C:\mosquitto") 이 줄 바로 상단에
+subprocess.call("taskkill /IM mosquitto.exe /F", shell=True) 이거 추가함
+자꾸 2개씩 켜졌다고 떠서 한번은 죽여주고 다시 실행해야해서

@@ -1,0 +1,3 @@
+D:\git\MAPF-ICBS\code
+
+python run_experiments.py --instance "instances/map.txt" --disjoint --hlsolver ICBS
