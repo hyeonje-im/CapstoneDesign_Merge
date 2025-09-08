@@ -53,21 +53,9 @@ class ControlsMain(Screen):
             size=(100, 30),
             pos_hint={'center_x': 0.5, 'center_y': 0.5}
         )
-        self.top_bar.add_widget(title)
+        
 
-        # X 버튼
-        self.controller_close_btn = Button(
-            text="X",
-            size_hint=(None, None),
-            size=(40, 40),
-            pos_hint={'right': 1, 'center_y': 0.5},
-            background_color=(0, 0, 0, 0),
-            color=(1, 1, 1, 1)
-        )
-        self.top_bar.add_widget(close_btn)
-
-        # 최종 배치
-        self.layout.add_widget(self.top_bar)
+        
 
     def update_bg(self, *args):
         self.bg.pos = self.pos
