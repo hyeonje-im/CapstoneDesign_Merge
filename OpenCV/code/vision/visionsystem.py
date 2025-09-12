@@ -6,10 +6,10 @@ from typing import Optional, Tuple, Dict
 from types import SimpleNamespace
 
 
-from vision.apriltag import AprilTagDetector
-from config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
-from vision.board import BoardDetectionResult, BoardDetector
-from vision.obstacle import ObstacleDetector
+from .apriltag import AprilTagDetector
+from ..config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
+from .board import BoardDetectionResult, BoardDetector
+from .obstacle import ObstacleDetector
 
 class VisionSystem:
     def __init__(self, undistorter, visualize=True):

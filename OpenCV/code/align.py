@@ -1,6 +1,6 @@
 import json
 import numpy as np
-from config import  IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID
+from .config import  IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID
 
 def _normalize_delta_deg(delta):
     """정규화: –180° ~ +180°"""

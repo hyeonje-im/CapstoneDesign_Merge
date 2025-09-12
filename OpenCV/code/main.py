@@ -6,19 +6,41 @@ import subprocess
 import math
 import time
 
+#kivy 영상 출력관련
+SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
+
+from queue import Queue, Empty
+_CMDQ: "Queue[tuple[str, dict]]" = Queue()  
+
+def post(cmd: str, **kwargs):
+    """UI(Kivy) 스레드에서 호출: 백엔드 스레드가 처리할 명령을 큐에 적재"""
+    _CMDQ.put((cmd, kwargs))
+
+# 키 이벤트 큐
+_KEYQ: "Queue[int]" = Queue()
+
+def push_keycode(code: int):
+    """외부(Kivy)에서 보낸 가상 키코드를 백엔드에 전달"""
+    _KEYQ.put(code)
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 ICBS_PATH = os.path.join(CURRENT_DIR, '..', 'MAPF-ICBS', 'code')
 sys.path.append(os.path.normpath(ICBS_PATH))
 
 
-from grid import load_grid, GRID_FOLDER
-from interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths
-from config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
-from vision.visionsystem import VisionSystem 
-from vision.camera import camera_open, Undistorter 
-from cbs.pathfinder import PathFinder, Agent
-from RobotController import RobotController
-from config import cell_size_cm
+from .grid import load_grid, GRID_FOLDER
+from .interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths
+from .config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
+from .vision.visionsystem import VisionSystem 
+from .vision.camera import camera_open, Undistorter 
+from .cbs.pathfinder import PathFinder, Agent
+from .RobotController import RobotController
+from .config import cell_size_cm
+from .ui_bridge import FrameBus
 
 SELECTED_RIDS = set()
 
@@ -73,21 +95,25 @@ if USE_MQTT:
 
 correction_coef_value = CORRECTION_COEF
 
+# 보정 패널
 def correction_trackbar_callback(val):
     global correction_coef_value
     correction_coef_value = val / 100.0
     print(f"[INFO] 실시간 보정계수: {correction_coef_value:.2f}")
 
-cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
-cv2.createTrackbar(
-    "Correction Coef", "CorrectionPanel",
-    int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
-)
-correction_trackbar_callback(int(CORRECTION_COEF * 100))  # 초기화
+# [IF] 창/트랙바는 Kivy 모드(SHOW_CV_WINDOWS=0)에서는 생성하지 않음
+if SHOW_CV_WINDOWS:
+    cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
+    cv2.createTrackbar(
+        "Correction Coef", "CorrectionPanel",
+        int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
+    )
+# 초기 콜백은 공통 적용
+correction_trackbar_callback(int(CORRECTION_COEF * 100))
 
 # 전역 변수
 
-#근접 시 즉시 정지 기능
+# 근접 시 즉시 정지 기능
 PROXIMITY_GUARD_ENABLED = True   # 끄려면 False
 PROXIMITY_STOP_LATCH = set()     # 이미 proximity로 im_S 보낸 로봇 ID(int)
 
@@ -406,11 +432,12 @@ def main():
     # 슬라이더 생성
     slider_create()
     detect_params = slider_value()  # 슬라이더에서 받아오기
-
-    cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("Video_display", vision.mouse_callback)
-    cv2.namedWindow("CBS Grid")
-    cv2.setMouseCallback("CBS Grid", mouse_event)
+    
+    if SHOW_CV_WINDOWS:
+        cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("Video_display", vision.mouse_callback)
+        cv2.namedWindow("CBS Grid")
+        cv2.setMouseCallback("CBS Grid", mouse_event)
 
     while True:
         ret, frame = cap.read()
@@ -432,6 +459,10 @@ def main():
         frame = visionOutput["frame"]
         tag_info = visionOutput["tag_info"]
         controller.set_tag_info_provider(lambda: tag_info)
+
+        # kivy로 보낼 프레임 전달
+        FrameBus.set_video(frame)
+        FrameBus.set_grid(vis)
 
         # 3) 새 tag_info로 PRESET_IDS 갱신 (리스트 객체 유지)
         _prev = PRESET_IDS[:]                           # 이전 목록 백업
@@ -476,10 +507,18 @@ def main():
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
 
-        cv2.imshow("CBS Grid", vis)
-        cv2.imshow("Video_display", frame)
-
-        key = cv2.waitKey(1)
+        if SHOW_CV_WINDOWS:
+            cv2.imshow("CBS Grid", vis)
+            cv2.imshow("Video_display", frame)
+            key = cv2.waitKey(1)
+        else:
+            # Kivy에서 푸시한 키코드 처리
+            try:
+                key = _KEYQ.get_nowait()
+            except Empty:
+                key = -1 
+        
+        # 키 처리
         if key == ord('q'):  # 'q' 키 -> 종료 (저장 없이)
             break
         elif key == ord('r'):
@@ -532,6 +571,7 @@ def main():
 
             selected_robot_id = rid
             print(f"🎯 목표지정 대상 로봇: {selected_robot_id}")
+        
         # 선택 로봇 정지 (그냥 누르면 전체 정지)
         elif key == ord('t'):
             targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
@@ -571,7 +611,8 @@ def main():
 
 
     cap.release()
-    cv2.destroyAllWindows()
+    if SHOW_CV_WINDOWS:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
