@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from .config import board_height_cm, board_width_cm, grid_width, grid_height, cell_size, COLORS
+from config import board_height_cm, board_width_cm, grid_width, grid_height, cell_size, COLORS
 
 def trackbar(val):
     pass

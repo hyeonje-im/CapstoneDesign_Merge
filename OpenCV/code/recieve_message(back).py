@@ -157,52 +157,6 @@ def set_tag_info_provider(func):
     global tag_info_provider
     tag_info_provider = func
 
-# def send_next_command(robot_id):
-#     idx = robot_indices[robot_id]
-#     commands = robot_command_map[robot_id]
-
-#     if idx < len(commands):
-#         cmd = commands[idx]
-
-#         # 실시간 회전 보정
-#         if cmd.startswith(("R", "L")) and tag_info_provider:
-#             tag_info = tag_info_provider()
-#             tag = tag_info.get(int(robot_id))
-#             hd = last_heading.get(robot_id, 0)
-            
-#             if tag and "yaw_front_deg" in tag:
-#                 delta = tag.get("heading_offset_deg", 0)
-
-#                 base_angle = 90
-#                 if (delta > 0 and cmd.startswith("R")) or (delta < 0 and cmd.startswith("L")):
-#                     corrected_angle = base_angle - abs(delta)
-#                 else:
-#                     corrected_angle = base_angle + abs(delta)
-
-#                 corrected_angle = max(0, round(corrected_angle, 1))
-#                 corrected_cmd = f"{cmd[0]}{corrected_angle}"
-#                 cmd = corrected_cmd
-
-#                 if cmd.startswith("R"):
-#                     hd = (hd + 1) % 4
-#                 elif cmd.startswith("L"):
-#                     hd = (hd - 1) % 4
-#                 last_heading[robot_id] = hd
-
-#         elif cmd.startswith("T"):
-#             hd = last_heading.get(robot_id, 0)
-#             hd = (hd + 2) % 4
-#             last_heading[robot_id] = hd
-
-#         cs = CommandSet(robot_id, [cmd])
-#         payload = json.dumps({"commands": [cs.to_dict()]})
-#         print(f"📤 [Robot_{robot_id}] → {cmd}")
-#         client.publish(MQTT_TOPIC_COMMANDS_, payload)
-#         inflight[robot_id] = True
-#         robot_indices[robot_id] += 1
-#     else:
-#         print(f"✅ [Robot_{robot_id}] 모든 명령 완료")
-
 def _send_step_commands():
     global step_inflight, step_done, active
 

@@ -1,6 +1,6 @@
 import json
 import numpy as np
-from .config import  IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID
+from config import  IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID
 
 def _normalize_delta_deg(delta):
     """정규화: –180° ~ +180°"""
@@ -148,3 +148,52 @@ def send_direction_align(client, tag_info, MQTT_TOPIC_COMMANDS_, targets=None, a
         client.publish(MQTT_TOPIC_COMMANDS_, json.dumps(payload, ensure_ascii=False))
 
 
+def send_goal_align(client, tag_info, MQTT_TOPIC_COMMANDS_, vision_system,
+                    goals: dict[int, tuple[int,int]],
+                    *, alignment_pending=None):
+    """
+    목표 셀(row,col)로 '회전(modeOnly) + 직진(modeC)'을 전송
+    - goals: { tag_id: (row, col) }
+    - vision_system: VisionSystem 인스턴스 (compute_goal_polar 사용)
+    - alignment_pending: 있으면 해당 ID만 처리
+    """
+    if goals is None or len(goals) == 0:
+        return
+
+    for tag_id, (row, col) in goals.items():
+        rid_str = str(tag_id)
+
+        # pending 필터 (있을 때만)
+        if alignment_pending is not None and rid_str not in alignment_pending:
+            print(f"⏩ Robot_{rid_str} 는 목표정렬 대상 아님 → 건너뜀")
+            continue
+
+        data = tag_info.get(tag_id)
+        if data is None or data.get('status') != 'On':
+            print(f"   ✗ Robot_{rid_str} 상태 비정상 → 건너뜀")
+            continue
+
+        # VisionSystem으로 목표 극좌표 계산
+        polar = vision_system.compute_goal_polar(tag_info, tag_id, row, col)
+        if polar is None:
+            print(f"   ✗ Robot_{rid_str} 목표 계산 실패(row={row}, col={col})")
+            continue
+
+        dist_cm, rel_deg = polar
+        # 회전+이동 명령 (send_center_align와 동일한 생성 규칙)
+        rot_cmd = f"{'L' if rel_deg < 0 else 'R'}{abs(rel_deg):.1f}_modeOnly"
+        mov_cmd = f"F{dist_cm:.1f}_modeC"
+
+        payload = {
+            "commands": [{
+                "robot_id": rid_str,
+                "command_count": 2,
+                "command_set": [
+                    {"command": rot_cmd},
+                    {"command": mov_cmd}
+                ]
+            }]
+        }
+
+        print(f"▶ 목표정렬 전송: Robot_{rid_str} → row={row}, col={col} | {rot_cmd} + {mov_cmd}")
+        client.publish(MQTT_TOPIC_COMMANDS_, json.dumps(payload, ensure_ascii=False))
