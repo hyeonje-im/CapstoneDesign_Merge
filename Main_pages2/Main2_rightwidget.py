@@ -36,6 +36,25 @@ class VideoFeed(Image):
         self.texture.blit_buffer(rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
 
 
+class WarpedFeed(Image):
+    """FrameBus에서 왜곡 보정된 BGR 프레임을 읽어 Texture로 그리는 Kivy 위젯."""
+    def __init__(self, fps=30, **kwargs):
+        super().__init__(allow_stretch=True, keep_ratio=True, **kwargs)
+        self._interval = 1.0 / max(1, fps)
+        Clock.schedule_interval(self._tick, self._interval)
+
+    def _tick(self, dt):
+        frame_bgr = FrameBus.get_warped()
+        if frame_bgr is None:
+            return
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        if (self.texture is None) or (self.texture.width != w) or (self.texture.height != h):
+            self.texture = Texture.create(size=(w, h), colorfmt='rgb')
+            self.texture.flip_vertical()
+        self.texture.blit_buffer(rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+
+
 class RightWidget(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', size_hint_x=0.6, **kwargs)

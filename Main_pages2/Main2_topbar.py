@@ -4,7 +4,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle
 from Utilities.UI_utilities import KLabel, KLine
-from Controls.Controls_Mainlayout import ControlsMain
+
 
 from kivy.uix.modalview import ModalView
 
@@ -44,7 +44,7 @@ class TopBar(BoxLayout):
 
         # === 버튼 2: 컨트롤러 ===
         self.controller_button = KButton(text="컨트롤러")
-        self.controller_button.bind(on_press=self.open_controller_popup)
+        
         self.add_widget(self.controller_button)
 
         # === 버튼 3: 추가기능 ===
@@ -59,18 +59,7 @@ class TopBar(BoxLayout):
         self.bg.pos = self.pos
         self.bg.size = self.size
 
-    def open_controller_popup(self, instance):
-        popup = ModalView(            
-            size_hint=(1,1),
-            auto_dismiss=True,
-            background = '',
-            background_color = (0,0,0,0),
-            
-        )
-        popup.add_widget(ControlsMain(size_hint=(1,1),
-        pos_hint={'center_x': 0.5, 'center_y': 0.5}))
-        popup.open()
-
+    
     def on_main_press(self, instance):
         print("메인 버튼 클릭됨")
         # 여기에 메인 관련 기능 추가 예정

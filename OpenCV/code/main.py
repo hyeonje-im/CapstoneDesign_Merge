@@ -6,15 +6,11 @@ import subprocess
 import math
 import time
 
+from queue import Queue, Empty
+
 #kivy 영상 출력관련
 SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
 
-from queue import Queue, Empty
-_CMDQ: "Queue[tuple[str, dict]]" = Queue()  
-
-def post(cmd: str, **kwargs):
-    """UI(Kivy) 스레드에서 호출: 백엔드 스레드가 처리할 명령을 큐에 적재"""
-    _CMDQ.put((cmd, kwargs))
 
 # 키 이벤트 큐
 _KEYQ: "Queue[int]" = Queue()
@@ -40,7 +36,7 @@ from .vision.camera import camera_open, Undistorter
 from .cbs.pathfinder import PathFinder, Agent
 from .RobotController import RobotController
 from .config import cell_size_cm
-from .ui_bridge import FrameBus
+from OpenCV.code.ui_bridge import FrameBus, get_cmd_nowait
 
 SELECTED_RIDS = set()
 
@@ -128,7 +124,7 @@ tag_info = {}
 
 # 비전 시스템 초기화
 video_path = r"C:/img/test2.mp4"
-cap, fps = camera_open(source=None)
+cap, fps = camera_open(source=0)
 
 undistorter = Undistorter(
     camera_cfg['type'],
@@ -506,6 +502,93 @@ def main():
         # UI 시각화 화면
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
+
+        # UI 명령 처리 로직
+        cmd, kwargs = get_cmd_nowait()
+        if cmd is None:
+            pass
+        elif cmd == "select_robot":
+            # UI가 선택한 로봇으로 백엔드의 SELECTED_RIDS 를 동기화
+            rid = int(kwargs["rid"])
+            SELECTED_RIDS.clear()
+            SELECTED_RIDS.add(rid)
+            print(f"[UI] 선택 로봇 동기화 → {sorted(SELECTED_RIDS)}")
+
+        elif cmd == "center_align":
+            # 키보드 'a'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                send_release_all(client, targets)
+                controller.run_center_align(targets, do_release=False)
+                print(f"[UI] 센터 정렬 실행: {targets}")
+            else:
+                print("정렬 대상 로봇이 없습니다.")
+
+        elif cmd == "direction_align":
+            # 키보드 'f'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                send_release_all(client, targets)
+                controller.run_direction_align(targets, do_release=False)
+                print(f"[UI] 방향 정렬 실행: {targets}")
+            else:
+                print("정렬 대상 로봇이 없습니다.")
+        
+        elif cmd == "set_goal":
+            rid = kwargs["rid"]; row = kwargs["row"]; col = kwargs["col"]
+            target = next((a for a in agents if a.id == rid), None)
+            if target:
+                target.goal = (row, col)
+                print(f"[UI] 로봇 {rid} 목표를 ({row},{col}) 로 설정")
+            else:
+                print(f"[UI] 로봇 {rid} 없음")
+
+        elif cmd == "compute_cbs":
+            send_release_all(client, PRESET_IDS)
+            compute_cbs()
+
+        elif cmd == "pause":
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.pause([str(r) for r in targets])
+                print(f"⏸ [UI] 로봇 {targets} 일시정지")
+
+        elif cmd == "resume":
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.resume([str(r) for r in targets])
+                for r in targets:
+                    PROXIMITY_STOP_LATCH.discard(int(r))
+            print(f"▶ [UI] 로봇 {targets} 재개")
+
+        # 보드 관련 4개 분기 추가
+        elif cmd == "lock_board":
+            try:
+                vision.lock_board()
+                print("[UI] 보드 고정됨")
+            except Exception as e:
+                print(f"[lock_board error] {e}")
+
+        elif cmd == "unlock_board":
+            try:
+                vision.reset_board()
+                print("[UI] 보드 고정 해제")
+            except Exception as e:
+                print(f"[unlock_board error] {e}")
+
+        elif cmd == "start_roi_selection":
+            try:
+                vision.start_roi_selection()
+                print("[UI] ROI 재선택 시작")
+            except Exception as e:
+                print(f"[start_roi_selection error] {e}")
+
+        elif cmd == "toggle_visualization":
+            try:
+                vision.toggle_visualization()
+                print(f"[UI] 시각화 모드: {'ON' if vision.visualize else 'OFF'}")
+            except Exception as e:
+                print(f"[toggle_visualization error] {e}")
 
         if SHOW_CV_WINDOWS:
             cv2.imshow("CBS Grid", vis)

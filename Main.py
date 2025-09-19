@@ -2,9 +2,13 @@ import sys
 import os
 import threading
 
-# (선택) 현재 파일 기준 상대 임포트가 필요하면 유지
+# 1) OpenCV 창 비활성화를 "import 전에" 설정
+os.environ["SHOW_CV_WINDOWS"] = "1"  # 0: 비활성화, 1: 활성화
+
+# 현재 파일 기준 상대 임포트가 필요하면 유지
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# 2) 이제 백엔드 import (환경변수 적용된 상태로 로드됨)
 import OpenCV.code.main as backend
 
 from kivy.app import App
@@ -16,23 +20,18 @@ from Utilities.UI_utilities import KLabel, KLine
 class MyScreenManager(ScreenManager):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.add_widget(MainLayout2(name='Main_layout2'))  # 1번 화면
+        self.add_widget(MainLayout2(name='Main_layout2'))
 
 class MyApp(App):
     def build(self):
-        # 1) OpenCV 백엔드 스레드 기동 (창 숨김)
-        os.environ["SHOW_CV_WINDOWS"] = "0"
-
+        # 3) 백엔드 스레드 기동
         t = threading.Thread(target=backend.main, daemon=True)
         t.start()
 
-        # 2) Kivy 키 입력을 백엔드로 전달 (기존 if key == ... 분기 재사용)
+        # 4) 키 입력 → 백엔드로 전달
         def _on_key_down(window, keycode, scancode, codepoint, modifiers):
-            # keycode는 (key, key_str) 또는 (scan, name) 형태일 수 있음
-            # 보통 (key, key_str) = (97, 'a') 형태. 안전하게 처리:
             name = None
             if isinstance(keycode, (list, tuple)):
-                # (key, name) / (scan, name) 중 name을 우선 사용
                 if len(keycode) >= 2 and isinstance(keycode[1], str):
                     name = keycode[1]
                 elif isinstance(keycode[0], str):
@@ -41,22 +40,19 @@ class MyApp(App):
                 name = keycode
 
             if name:
-                # 한 글자 키(a..z, 0..9 등)는 그대로 전달
-                if len(name) == 1:
-                    backend.push_keycode(ord(name))
+                # 소문자로 정규화해서 backend의 ord('n') 등과 일치시키기
+                n = name.lower()
+                if len(n) == 1:
+                    backend.push_keycode(ord(n))
                 else:
-                    # 자주 쓰는 특수키 매핑 (원하면 확장)
                     special_map = {
-                        'escape': ord('q'),   # ESC를 q로 매핑(종료)
-                        # 'enter': ord('\r'), # 필요시 추가
+                        'escape': ord('q'),  # 필요시 확장
                     }
-                    if name in special_map:
-                        backend.push_keycode(special_map[name])
-            return False  # 다른 위젯에도 이벤트 전달
+                    if n in special_map:
+                        backend.push_keycode(special_map[n])
+            return False
 
         Window.bind(on_key_down=_on_key_down)
-
-        # 3) UI 반환
         return MyScreenManager()
 
 if __name__ == "__main__":

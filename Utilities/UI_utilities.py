@@ -1,7 +1,8 @@
-
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.label import Label
 from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle, Line
+from kivy.uix.button import Button
 
 def KLabel(text, **kwargs):
     font_path = "assets/fonts/Pretendard-Regular.otf"
@@ -24,7 +25,7 @@ def make_darkcell(text, **kwargs):
     #테두리 선
     with box.canvas.after:
         Color(0, 0, 0, 1)
-        box.border = Line(rectagle = (box.x, box.y, box.width, box.height), width=1)
+        box.border = Line(rectangle = (box.x, box.y, box.width, box.height), width=1)
     
     def update_graphics(*args):
         box.bg.pos = box.pos
@@ -51,7 +52,7 @@ def make_brightcell(text, **kwargs):
     #테두리 선
     with box.canvas.after:
         Color(0, 0, 0, 1)
-        box.border = Line(rectagle = (box.x, box.y, box.width, box.height), width=1)
+        box.border = Line(rectangle = (box.x, box.y, box.width, box.height), width=1)
     
     def update_graphics(*args):
         box.bg.pos = box.pos
@@ -64,3 +65,42 @@ def make_brightcell(text, **kwargs):
     box.add_widget(KLabel(text=text, font_size=13, color=(1,1,1,1)))
     return box
 
+class KButton(ButtonBehavior, BoxLayout):
+    def __init__(self, text, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = 30
+        self.text = text
+
+        # 색상 정의
+        self.normal_color = (0x2E/255, 0x33/255, 0x49/255, 1)  # 밝은 셀
+        self.down_color   = (0x25/255, 0x28/255, 0x3B/255, 1)  # 어두운 셀
+
+        # 배경 + 테두리
+        with self.canvas.before:
+            Color(*self.normal_color)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+        with self.canvas.after:
+            Color(0, 0, 0, 1)
+            self.border = Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
+
+        self.bind(pos=self._update_graphics, size=self._update_graphics)
+
+        # 내부 텍스트
+        self.label = KLabel(text=text, font_size=13, color=(1, 1, 1, 1))
+        self.add_widget(self.label)
+
+    def _update_graphics(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+        self.border.rectangle = (self.x, self.y, self.width, self.height)
+
+    def on_press(self):
+        with self.canvas.before:
+            Color(*self.down_color)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+
+    def on_release(self):
+        with self.canvas.before:
+            Color(*self.normal_color)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
