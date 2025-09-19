@@ -1,7 +1,7 @@
 # simulator.py
 import cv2
 import numpy as np
-from fake_mqtt import FakeMQTTBroker
+from simulator.fake_mqtt import FakeMQTTBroker
 
 class Simulator:
     def __init__(self, map_array, colors, cell_size=50):

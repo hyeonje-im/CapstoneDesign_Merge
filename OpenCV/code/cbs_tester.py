@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 from grid import load_grid
 from interface import grid_visual, draw_agent_info_window
-from simulator import Simulator
-from fake_mqtt import FakeMQTTBroker
-from commandSendTest3 import CommandSet
+from simulator.simulator import Simulator
+from simulator.fake_mqtt import FakeMQTTBroker
+from simulator.commandSendTest3 import CommandSet
 from cbs.pathfinder import PathFinder, Agent
 from config import COLORS, grid_row, grid_col, cell_size
 import json

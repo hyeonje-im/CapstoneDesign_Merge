@@ -2,7 +2,7 @@
 # import time
 # import json
 # import paho.mqtt.client as mqtt
-# from align import send_center_align, send_north_align 
+# from controller.align import send_center_align, send_north_align 
 # from config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
 # import threading
 
@@ -11,12 +11,12 @@
 import json
 import time
 import threading
-from align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
+from controller.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
 import math
 from typing import Optional, Callable
 from config import corridor_width
-from corridor_inspector import CorridorInspector
-from collision_guard import GuardConfig
+from controller.corridor_inspector import CorridorInspector
+from controller.collision_guard import GuardConfig
 
 class RobotController:
     def __init__(
@@ -692,7 +692,7 @@ class RobotController:
             print("[go_to_step_goal] 이번 스텝 목표 없음 → 건너뜀")
             return
 
-        from align import send_goal_align
+        from controller.align import send_goal_align
         send_goal_align(self.client, tag_info, self.mqtt_topic_commands, vs(), goals, alignment_pending=None)
 
         # 송신 후 집계 표식은 유지(안전)

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Iterable
 
 import math
-from collision_guard import GuardConfig
+from controller.collision_guard import GuardConfig
 
 Vec2 = Tuple[float, float]
 

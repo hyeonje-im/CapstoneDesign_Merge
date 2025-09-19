@@ -18,10 +18,10 @@ from config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_
 from vision.visionsystem import VisionSystem 
 from vision.camera import camera_open, Undistorter 
 from cbs.pathfinder import PathFinder, Agent
-from RobotController import RobotController
+from controller.RobotController import RobotController
 from config import cell_size_cm
-from manual_mode import ManualPathSystem
-from collision_guard import CollisionGuard, GuardConfig
+from controller.manual_mode import ManualPathSystem
+from controller.collision_guard import CollisionGuard, GuardConfig
 
 SELECTED_RIDS = set()
 GOAL_ALIGN_MODE = False
@@ -49,7 +49,7 @@ else:
             print(f"[MQTT_DISABLED] publish → topic={topic}, payload={payload}")
     client = _DummyClient()
 
-from release_manager import ReleaseManager, ReleasePolicy
+from controller.release_manager import ReleaseManager, ReleasePolicy
 
 controller = RobotController(
     client=client,
@@ -323,7 +323,7 @@ def unified_mouse(event, x, y, flags, param):
             controller.register_step_goals_for_current(goals)
 
             # 퍼블리시 (회전 modeOnly → 이동 modeC)
-            from align import send_goal_align
+            from controller.align import send_goal_align
             send_goal_align(client, tag_info, MQTT_TOPIC_COMMANDS_, vision, goals, alignment_pending=None)
             print(f"[GoalAlign] ({row},{col}) ← {sorted(SELECTED_RIDS)} 로 전송 완료")
         except Exception as e:

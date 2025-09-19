@@ -12,7 +12,7 @@ manual_mode.py — 외부 수동 경로 시스템 (Global MANUAL/CBS 토글)
 통합 가이드 (main.py 변경 최소화)
 ---------------------------------------------------
 # 1) import 및 인스턴스 생성 (main.py 상단 또는 초기화 위치)
-from manual_mode import ManualPathSystem
+from controller.manual_mode import ManualPathSystem
 manual = ManualPathSystem(
     get_selected_rids=lambda: SELECTED_RIDS,           # main이 유지하는 선택 집합
     get_preset_ids=lambda: PRESET_IDS,                 # 현재 보이는/접속중 로봇 ID 목록
