@@ -4,10 +4,12 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.graphics import Color, Rectangle, Line
 from kivy.uix.button import Button
 
+# 한글 폰트 적용된 Kivy Label
 def KLabel(text, **kwargs):
     font_path = "assets/fonts/Pretendard-Regular.otf"
     return Label(text=text, font_name=font_path, **kwargs)
 
+# 테두리 선 그리기 함수
 def KLine(widget, **kwargs):
     return Line(rectangle=(widget.x, widget.y, widget.width, widget.height), width=1, **kwargs)
 
