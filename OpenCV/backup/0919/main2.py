@@ -12,16 +12,16 @@ sys.path.append(os.path.normpath(ICBS_PATH))
 
 
 from grid import load_grid, GRID_FOLDER
-from interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths
-from config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
-from vision.visionsystem import VisionSystem 
-from vision.camera import camera_open, Undistorter 
-from cbs.pathfinder import PathFinder, Agent
-from RobotController import RobotController
-from align import send_center_align, send_north_align 
-from config import cell_size_cm
-from manual_mode import ManualPathSystem  # ← 수동 경로 시스템 추가
-from recieve_message import (
+from OpenCV.code.interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths
+from OpenCV.code.config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
+from OpenCV.code.vision.visionsystem import VisionSystem 
+from OpenCV.code.vision.camera import camera_open, Undistorter 
+from OpenCV.code.cbs.pathfinder import PathFinder, Agent
+from OpenCV.code.controller.RobotController import RobotController
+from OpenCV.code.controller.align import send_center_align, send_north_align 
+from OpenCV.code.config import cell_size_cm
+from OpenCV.code.controller.manual_mode import ManualPathSystem  # ← 수동 경로 시스템 추가
+from OpenCV.code.recieve_message import (
     set_tag_info_provider, set_alignment_pending, alignment_pending,
     check_center_alignment_ok, check_all_completed, start_auto_sequence,
     check_direction_alignment_ok, alignment_angle,
@@ -44,7 +44,7 @@ print(f"▶ command_transfer_encoderSelf.py 별도 콘솔에서 실행: {CTS_SCR
 USE_MQTT = 0  # 0: 비사용, 1: 사용
 
 if USE_MQTT:
-    from recieve_message import init_mqtt_client
+    from OpenCV.code.recieve_message import init_mqtt_client
     client = init_mqtt_client()   # ← recieve_message의 '그' 클라이언트 단일 사용
 else:
     MQTT_TOPIC_COMMANDS_ = None

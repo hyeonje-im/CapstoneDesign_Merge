@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import math
 import time
-from config import corridor_width
+from OpenCV.code.config import corridor_width
 
 from enum import Enum
 

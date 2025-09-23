@@ -2,7 +2,7 @@
 import time
 import json
 import paho.mqtt.client as mqtt
-from config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
+from OpenCV.code.config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
 import threading
 
 def init_mqtt_client():
@@ -532,7 +532,7 @@ def on_message(client, userdata, msg):
 
 
 
-# client = None  # 전역
+client = None  # 전역
 
 def on_connect(client, userdata, flags, rc):
     client.subscribe(DONE_TOPIC)

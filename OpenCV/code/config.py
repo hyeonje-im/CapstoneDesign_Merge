@@ -3,7 +3,7 @@ import os
 
 # 브로커 정보
 #연구실 : 192.168.0.25
-IP_address_ = "192.168.0.48"
+IP_address_ = "192.168.0.25"
 MQTT_PORT      = 1883
 MQTT_TOPIC_COMMANDS_ = "command/transfer"
 

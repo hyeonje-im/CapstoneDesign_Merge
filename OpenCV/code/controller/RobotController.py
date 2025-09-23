@@ -11,12 +11,12 @@
 import json
 import time
 import threading
-from controller.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
+from OpenCV.code.controller.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
 import math
 from typing import Optional, Callable
-from config import corridor_width
-from controller.corridor_inspector import CorridorInspector
-from controller.collision_guard import GuardConfig
+from OpenCV.code.config import corridor_width
+from OpenCV.code.controller.corridor_inspector import CorridorInspector
+from OpenCV.code.controller.collision_guard import GuardConfig
 
 class RobotController:
     def __init__(

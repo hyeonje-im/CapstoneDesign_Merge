@@ -6,11 +6,11 @@ from typing import Optional, Tuple, Dict
 from types import SimpleNamespace
 import time
 
-from vision.apriltag import AprilTagDetector
-from config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
-from vision.board import BoardDetectionResult, BoardDetector
-from vision.obstacle import ObstacleDetector
-from vision.tracking import TrackingManager
+from OpenCV.code.vision.apriltag import AprilTagDetector
+from OpenCV.code.config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
+from OpenCV.code.vision.board import BoardDetectionResult, BoardDetector
+from OpenCV.code.vision.obstacle import ObstacleDetector
+from OpenCV.code.vision.tracking import TrackingManager
 
 class VisionSystem:
     def __init__(self, undistorter, visualize=True):
