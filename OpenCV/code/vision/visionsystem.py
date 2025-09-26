@@ -11,6 +11,7 @@ from OpenCV.code.config import board_width_cm, board_height_cm, grid_row, grid_c
 from OpenCV.code.vision.board import BoardDetectionResult, BoardDetector
 from OpenCV.code.vision.obstacle import ObstacleDetector
 from OpenCV.code.vision.tracking import TrackingManager
+from OpenCV.code.ui_bridge import FrameBus
 
 class VisionSystem:
     def __init__(self, undistorter, visualize=True):
@@ -214,6 +215,14 @@ class VisionSystem:
                     q = self.cm_to_warp_px(cx, cy)
                     if q is not None:
                         cv2.circle(warped_color, q, 2, (0,0,0), -1)
+            
+            #============================
+            #============================
+            # 워프영상을 FrameBus에 전달
+            FrameBus.set_warped(warped_color)
+            #============================
+            #============================
+
 
             # 3) 기존 미리보기 창 이름을 그대로 사용 (새 창 만들지 않음)
             warped_resized = cv2.resize(

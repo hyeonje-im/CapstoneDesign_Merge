@@ -10,7 +10,8 @@ class FrameBus:
     _lock = threading.Lock()
     _video = None   # BGR ndarray
     _grid  = None   # BGR ndarray
-
+    _warped = None  # BGR ndarray
+    
     @classmethod
     def set_video(cls, frame_bgr):
         with cls._lock:
@@ -31,6 +32,15 @@ class FrameBus:
         with cls._lock:
             return cls._grid
 
+    @classmethod
+    def set_warped(cls, frame_bgr):
+        with cls._lock:
+            cls._warped = frame_bgr
+
+    @classmethod
+    def get_warped(cls):
+        with cls._lock:
+            return cls._warped
 
 
 _CMDQ: "Queue[Tuple[str, Dict[str, Any]]]" = Queue()

@@ -5,7 +5,7 @@ from kivy.graphics import Color, Rectangle, Line
 from kivy.uix.image import Image
 from kivy.graphics.texture import Texture
 from kivy.clock import Clock
-
+from kivy.uix.widget import Widget
 from Utilities.UI_utilities import KLine, make_darkcell, make_brightcell, KButton
 from OpenCV.code.ui_bridge import FrameBus, post
 from OpenCV.code.config import grid_row, grid_col
@@ -104,27 +104,25 @@ class CenterWidget(BoxLayout):
         self.bind(pos=self.update_bg_and_border, size=self.update_bg_and_border)
 
         # ── 상단 50%: 로봇 정보 + 그리드뷰 + 선택버튼
-        upper_half = BoxLayout(orientation='vertical', size_hint_y=0.5, spacing=4, padding=[0,4,0,4])
+        upper_half = BoxLayout(orientation='vertical', size_hint_y=0.8, spacing=1)
         upper_half.add_widget(make_brightcell("총 로봇 대수"))
         self.robot_count_cell = make_brightcell("0")  # 초기값은 0
         upper_half.add_widget(self.robot_count_cell)
+
+        upper_half.add_widget(Widget(size_hint_y=None, height=10))
 
         # 그리드 뷰
         self.grid_view = GridTextureView(size_hint_y=1)
         self.grid_view.center_widget = self  # ★ CenterWidget 참조 주입
         upper_half.add_widget(self.grid_view)
 
-        # 로봇 선택 버튼 4개
+        # 로봇 선택 버튼 
         robot_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
         for i in range(1, 5):
             btn = KButton(text=f"로봇 {i}")
             btn.bind(on_press=lambda inst, rid=i: self.select_robot(rid))
             robot_btns.add_widget(btn)
         upper_half.add_widget(robot_btns)
-
-        # ── 하단 50%: 장애물 + 제어 버튼들
-        lower_half = BoxLayout(orientation='vertical', size_hint_y=0.5, padding=[0,4,0,4])
-        
 
         # 보드 고정 / 해제 / ROI 재선택 / 시각화 토글 버튼들
         board_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
@@ -145,7 +143,9 @@ class CenterWidget(BoxLayout):
         btn_viz.bind(on_press=lambda inst: post("toggle_visualization"))
         board_btns.add_widget(btn_viz)
 
-        lower_half.add_widget(board_btns)
+        upper_half.add_widget(board_btns)
+     
+        
 
         # 정렬 버튼들 (센터 정렬 = a / 방향 정렬 = f)
         align_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
@@ -158,31 +158,72 @@ class CenterWidget(BoxLayout):
         btn_dir.bind(on_press=lambda inst: post("direction_align"))
         align_btns.add_widget(btn_dir)
 
-        lower_half.add_widget(align_btns)
+        
+        
+        upper_half.add_widget(align_btns)
 
-        # CBS 제어 버튼들 (경로탐색 / 정지 / 재개)
+                # CBS 제어 버튼들 (경로탐색 / 정지 / 재개 / 즉시정지)
         cbs_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
 
-        btn_run = KButton(text="경로탐색")        # 키보드 'c' 대응
+        btn_run = KButton(text="경로탐색")        # 키보드 'c'
         btn_run.bind(on_press=lambda inst: post("compute_cbs"))
         cbs_btns.add_widget(btn_run)
 
-        btn_stop = KButton(text="정지")
+        btn_stop = KButton(text="정지")           # 키보드 't'
         btn_stop.bind(on_press=lambda inst: post("pause"))
         cbs_btns.add_widget(btn_stop)
 
-        btn_resume = KButton(text="재개")
+        btn_resume = KButton(text="재개")         # 과거 'y'
         btn_resume.bind(on_press=lambda inst: post("resume"))
         cbs_btns.add_widget(btn_resume)
 
-        lower_half.add_widget(cbs_btns)
+        btn_immstop = KButton(text="즉시정지")    # 키보드 'u'
+        btn_immstop.bind(on_press=lambda inst: post("immediate_stop"))
+        cbs_btns.add_widget(btn_immstop)
 
-        # 중앙 가로선
-        with self.canvas.after:
-            Color(0, 0, 0, 1)
-            self.middle_line = Line(points=[], width=1)
-        self.bind(pos=self.update_middle_line, size=self.update_middle_line)
+        upper_half.add_widget(cbs_btns)
 
+
+        # Grid 저장 / Reset
+        grid_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
+
+        btn_save = KButton(text="Grid 저장")      # 키보드 'g'
+        btn_save.bind(on_press=lambda inst: post("save_grid"))
+        grid_btns.add_widget(btn_save)
+
+        btn_reset = KButton(text="Reset All")     # 키보드 'r'
+        btn_reset.bind(on_press=lambda inst: post("reset_all"))
+        grid_btns.add_widget(btn_reset)
+
+        upper_half.add_widget(grid_btns)
+
+
+        # 토글 모드 (수동 / GoalAlign)
+        toggle_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
+
+        btn_manual = KButton(text="수동 모드")    # 키보드 'z'
+        btn_manual.bind(on_press=lambda inst: post("manual_toggle"))
+        toggle_btns.add_widget(btn_manual)
+
+        btn_goalalign = KButton(text="GoalAlign") # 키보드 'h'
+        btn_goalalign.bind(on_press=lambda inst: post("goalalign_toggle"))
+        toggle_btns.add_widget(btn_goalalign)
+
+        upper_half.add_widget(toggle_btns)
+
+
+        # 종료 버튼
+        quit_btns = BoxLayout(size_hint_y=None, height=40, spacing=4)
+        btn_quit = KButton(text="종료")           # 키보드 'q'
+        btn_quit.bind(on_press=lambda inst: post("quit"))
+        quit_btns.add_widget(btn_quit)
+
+        upper_half.add_widget(quit_btns)
+
+        # ── 하단 30% (더비 공간들)
+        lower_half = BoxLayout(orientation='vertical', size_hint_y=0.2)
+        
+        
         # 최종 배치
         self.add_widget(upper_half)
         self.add_widget(lower_half)

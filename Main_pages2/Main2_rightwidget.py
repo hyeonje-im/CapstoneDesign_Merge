@@ -2,7 +2,6 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# ▼ 추가 import
 import cv2
 from kivy.clock import Clock
 from kivy.uix.image import Image
@@ -37,23 +36,61 @@ class VideoFeed(Image):
         self.texture.blit_buffer(rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
 
 
-class WarpedFeed(Image):
-    """FrameBus에서 왜곡 보정된 BGR 프레임을 읽어 Texture로 그리는 Kivy 위젯."""
+class WarpedFeed(RelativeLayout):
+    """FrameBus에서 왜곡 보정된 BGR 프레임을 읽어 Texture로 그리는 Kivy 위젯.
+       - 워프보드가 없으면 배경색과 안내 문구 표시
+       - 워프보드가 있으면 영상 표시
+    """
     def __init__(self, fps=30, **kwargs):
-        super().__init__(allow_stretch=True, keep_ratio=True, **kwargs)
+        super().__init__(**kwargs)
+
+        # 내부에 Image 위젯 배치 (실제 영상 표시용)
+        self.img = Image(allow_stretch=True, keep_ratio=True, size_hint=(1, 1))
+        self.add_widget(self.img)
+
+        # 중앙 안내 라벨
+        self.label = Label(
+            text="Warped Board is not detected",
+            color=(1, 1, 1, 1),   # 흰색
+            font_size=18,
+            halign="center",
+            valign="middle"
+        )
+        self.add_widget(self.label)
+
+        # UI 배경색 (#2E3349)
+        with self.canvas.before:
+            Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        # 주기적으로 FrameBus 확인
         self._interval = 1.0 / max(1, fps)
         Clock.schedule_interval(self._tick, self._interval)
+
+    def _update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
 
     def _tick(self, dt):
         frame_bgr = FrameBus.get_warped()
         if frame_bgr is None:
+            # 워프보드 감지 안됨 → 안내 문구 보이기
+            self.label.opacity = 1
+            self.img.opacity = 0
             return
+
+        # 워프보드 감지됨 → 영상 표시
+        self.label.opacity = 0
+        self.img.opacity = 1
+
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        if (self.texture is None) or (self.texture.width != w) or (self.texture.height != h):
-            self.texture = Texture.create(size=(w, h), colorfmt='rgb')
-            self.texture.flip_vertical()
-        self.texture.blit_buffer(rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+        if (self.img.texture is None) or (self.img.texture.width != w) or (self.img.texture.height != h):
+            self.img.texture = Texture.create(size=(w, h), colorfmt='rgb')
+            self.img.texture.flip_vertical()
+        self.img.texture.blit_buffer(rgb.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
+
 
 
 class RightWidget(BoxLayout):
@@ -85,13 +122,10 @@ class RightWidget(BoxLayout):
         #원본 영상
         self.video_feed = VideoFeed(fps=30, size_hint = (1,1))
     
-        #워프보드 영상
-        self.warped_feed = Widget(size_hint = (1,1))
-        with self.warped_feed.canvas.before:
-            Color(0.2, 0.2, 0.2, 1)  # 회색 배경
-            self.placeholder_bg = Rectangle(pos=self.warped_feed.pos, size=self.warped_feed.size)
-        self.warped_feed.bind(pos=self.update_placeholder, size=self.update_placeholder)
+        # 워프보드 영상
+        self.warped_feed = WarpedFeed(fps=30, size_hint=(1, 1))
 
+    
         # 두 위젯 겹쳐서 놓기
         self.video_layer.add_widget(self.video_feed)
         self.video_layer.add_widget(self.warped_feed)
