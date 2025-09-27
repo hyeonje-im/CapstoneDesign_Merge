@@ -64,7 +64,7 @@ print(f"▶ command_transfer.py 별도 콘솔에서 실행: {CTS_SCRIPT}")
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
 
-USE_MQTT = 0  # 0: 비사용, 1: 사용
+USE_MQTT = 1  # 0: 비사용, 1: 사용
 
 if USE_MQTT:
     from OpenCV.code.recieve_message import init_mqtt_client
