@@ -3,14 +3,13 @@ import os
 
 # 브로커 정보
 #연구실 : 192.168.0.25
-IP_address_ = "192.168.0.9"
+IP_address_ = "192.168.0.48"
 MQTT_PORT      = 1883
 MQTT_TOPIC_COMMANDS_ = "command/transfer"
 
 NORTH_TAG_ID = 12  # 바닥에 고정된 북쪽 태그 겸 빨간 ROI생성 기준 태그
 
 critical_dist =12
-corridor_width=12
 
 # ===카메라 매개변수 (캘리브레이션된 값 사용)===
 # 선택할 카메라 ID

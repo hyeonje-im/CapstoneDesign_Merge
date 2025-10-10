@@ -1,117 +1,71 @@
 # tracking.py
-import collections, math, time
-from collections import deque
+import collections
 
-class MovingWindowTracker:
-    def __init__(self, window_sec=0.25, max_speed_cmps=200.0, zero_snap_thr=2.0, ema_tau=0.15):
-        self.window_sec = window_sec
-        self.points = deque()  # (t, x_cm, y_cm)
-        self.max_speed_cmps = max_speed_cmps
-        self.zero_snap_thr = zero_snap_thr
-        self.vx_ema = 0.0
-        self.vy_ema = 0.0
-        self.ema_tau = ema_tau
-        self._t_prev = None
-        self._x_prev = None
-        self._y_prev = None
+class MovingAverageTracker:
+    """ 개별 태그의 이동 평균 좌표 및 속도를 추적하는 클래스 """
+    def __init__(self, window_size=5):
+        self.window_size = window_size
+        self.positions = collections.deque()
 
-    def _trim(self, t_now):
-        # 시간 기반 윈도우: t_now - t0 > window_sec 인 것들 제거
-        w = self.window_sec
-        while self.points and (t_now - self.points[0][0] > w):
-            self.points.popleft()
-
-    def _update_ema(self, vx, vy, dt):
-        if dt <= 0: return
-        beta = 1 - math.exp(-dt / max(self.ema_tau, 1e-3))  # 0~1
-        self.vx_ema = (1 - beta) * self.vx_ema + beta * vx
-        self.vy_ema = (1 - beta) * self.vy_ema + beta * vy
-
-    def update(self, x_cm, y_cm, t):
-        # 아웃라이어 점프 가드
-        if self._t_prev is not None:
-            dt = max(0.01, min(0.20, t - self._t_prev))
-            dx = x_cm - self._x_prev
-            dy = y_cm - self._y_prev
-            if math.hypot(dx, dy) > self.max_speed_cmps * dt * 1.5:
-                # 비정상 점프면 샘플 무시
-                return
-        # 샘플 저장
-        self.points.append((t, float(x_cm), float(y_cm)))
-        self._t_prev, self._x_prev, self._y_prev = t, x_cm, y_cm
-        self._trim(t)
-
+    def update(self, x, y, t):
+        """ 위치 및 시간 업데이트 (최대 window_size개의 데이터 유지) """
+        self.positions.append((x, y, t))
+        while len(self.positions) > self.window_size:
+            self.positions.popleft()
+    
     def get_smoothed_position(self):
-        if not self.points:
+        """ 최근 위치들의 평균을 반환 """
+        n = len(self.positions)
+        if n == 0:
             return 0.0, 0.0
-        sx = sum(p[1] for p in self.points)
-        sy = sum(p[2] for p in self.points)
-        n = len(self.points)
-        return sx / n, sy / n
-
-    def get_velocity_ols(self):
-        """시간 기반 최소자승으로 vx, vy 추정"""
-        n = len(self.points)
-        if n < 2: return 0.0, 0.0
-        t0 = self.points[0][0]
-        # 수치 안정 위해 t를 0 기준으로 이동
-        ts = [p[0] - t0 for p in self.points]
-        xs = [p[1] for p in self.points]
-        ys = [p[2] for p in self.points]
-        st = sum(ts); stt = sum(tt*tt for tt in ts)
-        sx = sum(xs); sxx = sum(x*x for x in xs)  # sxx는 안 쓰지만 남김
-        sy = sum(ys)
-        n = float(n)
-        denom = (n*stt - st*st)
-        if abs(denom) < 1e-6:
+        sum_x, sum_y = 0.0, 0.0
+        for (x, y, _) in self.positions:
+            sum_x += x
+            sum_y += y
+        return sum_x / n, sum_y / n
+    
+    def get_average_velocity(self):
+        """ 최근 데이터의 시작과 끝을 비교해 속도를 계산 """
+        n = len(self.positions)
+        if n < 2:
             return 0.0, 0.0
-        vx = (n*sum(t*x for t, x in zip(ts, xs)) - st*sx) / denom
-        vy = (n*sum(t*y for t, y in zip(ts, ys)) - st*sy) / denom
-        # EMA 업데이트(선택)
-        dt = (self.points[-1][0] - self.points[-2][0]) if len(self.points) >= 2 else 0.033
-        self._update_ema(vx, vy, dt)
-        return vx, vy
+        
+        x_old, y_old, t_old = self.positions[0]
+        x_new, y_new, t_new = self.positions[-1]
+        dx = x_new - x_old
+        dy = y_new - y_old
+        dt = t_new - t_old
+        if dt == 0:
+            return 0.0, 0.0
+        return dx / dt, dy / dt
 
-    def get_velocity(self, use_ema=True):
-        vx, vy = self.get_velocity_ols()
-        if use_ema:
-            speed_inst = math.hypot(vx, vy)
-            # 정지 스냅
-            if speed_inst < self.zero_snap_thr:
-                self.vx_ema = 0.0; self.vy_ema = 0.0
-            return self.vx_ema, self.vy_ema
-        else:
-            # 정지 스냅
-            if math.hypot(vx, vy) < self.zero_snap_thr:
-                return 0.0, 0.0
-            return vx, vy
 
 class TrackingManager:
-    def __init__(self, window_sec=0.25, max_speed_cmps=200.0, zero_snap_thr=2.0, ema_tau=0.15):
-        self.trackers = {}
-        self.cfg = dict(window_sec=window_sec, max_speed_cmps=max_speed_cmps,
-                        zero_snap_thr=zero_snap_thr, ema_tau=ema_tau)
+    """ 여러 개의 태그에 대해 tracker를 자동 관리하는 클래스 """
+    def __init__(self, window_size=5):
+        self.trackers = {}  # tag_id별 Tracker 저장
+        self.window_size = window_size
 
     def update_all(self, tag_info, current_time):
-        for tid, d in tag_info.items():
-            if d.get("status") != "On": 
-                continue
-            coords = d.get("coordinates")
-            if not coords: 
-                continue
-            x_cm, y_cm = coords
-            tr = self.trackers.get(tid)
-            if tr is None:
-                tr = self.trackers[tid] = MovingWindowTracker(**self.cfg)
-            tr.update(x_cm, y_cm, float(current_time))
+        """
+        모든 태그의 위치를 업데이트하고 이동 평균 좌표 & 속도를 계산한 후 tag_info에 반영
+        """
+        for tag_id, data in tag_info.items():
+            raw_x, raw_y = data["coordinates"]
 
-            avg_x, avg_y = tr.get_smoothed_position()
-            vx, vy = tr.get_velocity(use_ema=True)
-            speed = math.hypot(vx, vy)
-            ux, uy = (vx/speed, vy/speed) if speed > 1e-6 else (0.0, 0.0)
+            # 해당 태그의 tracker가 없으면 새로 생성
+            if tag_id not in self.trackers:
+                self.trackers[tag_id] = MovingAverageTracker(window_size=self.window_size)
+            
+            # 트래커 업데이트
+            tracker = self.trackers[tag_id]
+            tracker.update(raw_x, raw_y, current_time)
 
-            d["smoothed_coordinates_cm"] = (avg_x, avg_y)
-            d["velocity_cmps"]           = (vx, vy)
-            d["speed_cmps"]              = speed
-            d["motion_dir_unit"]         = (ux, uy)
-            d["last_tracking_ts"]        = current_time
+            # 이동 평균 좌표 & 속도 계산 후 tag_info에 저장
+            avg_x, avg_y = tracker.get_smoothed_position()
+            vx, vy = tracker.get_average_velocity()
+
+            data["smoothed_coordinates"] = (avg_x, avg_y)
+            data["velocity"] = (vx, vy)
+
+            

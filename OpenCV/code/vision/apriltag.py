@@ -2,7 +2,7 @@
 import numpy as np
 from pupil_apriltags import Detector
 import cv2
-from OpenCV.code.config import dist_coeffs, object_points, tag_role
+from config import dist_coeffs, object_points, tag_role
 import time
 
 class AprilTagDetector:
@@ -135,9 +135,9 @@ class AprilTagDetector:
             theta = np.deg2rad(yaw_deg)
             dx = int(arrow_length * np.cos(theta))
             dy = int(-arrow_length * np.sin(theta))
-            pt2 = (center[0] + round(dx*0.3), center[1] + round(dy*0.3))
+            pt2 = (center[0] + dx, center[1] + dy)
 
-            cv2.arrowedLine(frame, center, pt2, (0, 222, 0), 2, tipLength=0.2)
+            cv2.arrowedLine(frame, center, pt2, (0, 222, 0), 2, tipLength=0.3)
             cv2.putText(frame, f"ID: {tag_id}", (center[0], center[1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 

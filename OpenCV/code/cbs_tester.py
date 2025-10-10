@@ -12,9 +12,9 @@ import cv2
 import numpy as np
 from grid import load_grid
 from interface import grid_visual, draw_agent_info_window
-from simulator.simulator import Simulator
-from simulator.fake_mqtt import FakeMQTTBroker
-from simulator.commandSendTest3 import CommandSet
+from simulator import Simulator
+from fake_mqtt import FakeMQTTBroker
+from commandSendTest3 import CommandSet
 from cbs.pathfinder import PathFinder, Agent
 from config import COLORS, grid_row, grid_col, cell_size
 import json
@@ -198,14 +198,22 @@ def send_next_step(robot_id):
     if not pending_steps[robot_id]:
         return False
 
-    # 한 칸만 보장(방어 로직)
+        # 한 칸만 보장(방어 로직)
     target = tuple(pending_steps[robot_id][0])
-    manh = abs(target[0]-cur_pos[0]) + abs(target[1]-cur_pos[1])
-    if manh > 1:
-        step = (cur_pos[0] + (1 if target[0] > cur_pos[0] else -1 if target[0] < cur_pos[0] else 0),
-                cur_pos[1] + (1 if target[1] > cur_pos[1] else -1 if target[1] < cur_pos[1] else 0))
+    dr = 1 if target[0] > cur_pos[0] else -1 if target[0] < cur_pos[0] else 0
+    dc = 1 if target[1] > cur_pos[1] else -1 if target[1] < cur_pos[1] else 0
+
+    # 항상 '한 축'만 이동하도록 보정
+    if abs(target[0]-cur_pos[0]) + abs(target[1]-cur_pos[1]) > 1:
+        step = (cur_pos[0] + dr, cur_pos[1]) if dr != 0 else (cur_pos[0], cur_pos[1] + dc)
     else:
         step = pending_steps[robot_id].popleft()
+
+    # 최종 안전장치(혹시 모를 케이스 로깅)
+    if abs(step[0]-cur_pos[0]) + abs(step[1]-cur_pos[1]) != 1:
+        print(f"[WARN] non-unit step {cur_pos}->{step}, target={target}; forcing axis step")
+        step = (cur_pos[0] + (1 if dr != 0 else 0), cur_pos[1] + (1 if (dr == 0 and dc != 0) else 0))
+
 
     cs = CommandSet(str(robot_id), [cur_pos, step], initial_dir=_expected_dir(robot))
     broker.send_command_sets([cs])

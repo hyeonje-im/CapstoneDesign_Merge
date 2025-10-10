@@ -1,4 +1,4 @@
-from OpenCV.code.cbs.cbs_manager import CBSManager
+from cbs.cbs_manager import CBSManager
 
 import numpy as np
 import random

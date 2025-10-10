@@ -1,10 +1,10 @@
 # simulator.py
 import cv2
 import numpy as np
-from simulator.fake_mqtt import FakeMQTTBroker
+from fake_mqtt import FakeMQTTBroker
 
 class Simulator:
-    def __init__(self, map_array, colors, cell_size=50):
+    def __init__(self, map_array, colors, cell_size=50,home_positions=None):
         self.map_array = map_array
         self.colors = colors
         self.cell_size = cell_size
@@ -15,6 +15,7 @@ class Simulator:
         self.robot_past_paths = {}
         self.random_mode_enabled = False
         self.arrival_callback = None
+        self.home_positions = home_positions if home_positions is not None else {}
 
     # 로봇 추가
     def add_robot(self, robot_id, broker, start_pos=(0, 0), direction="north"):
@@ -26,7 +27,24 @@ class Simulator:
         print(f"Simulator: 로봇 {robot_id} 추가 완료. 시작 위치: {start_pos}")
         self.robot_info[robot_id] = {'path': None, 'goal': None, 'start': start_pos}
         return robot
-
+    
+    # ✅ 2. 홈 위치를 그리는 함수 새로 추가
+    def draw_home_positions(self, vis):
+        """홈 위치를 연한 회색으로 그립니다."""
+        if not self.home_positions:
+            return
+            
+        color = (220, 220, 220) # 연한 회색
+        overlay = vis.copy()
+        
+        for pos in self.home_positions.values():
+            r, c = pos
+            x, y = c * self.cell_size, r * self.cell_size
+            cv2.rectangle(overlay, (x, y), (x + self.cell_size, y + self.cell_size), color, -1)
+            
+        # 반투명 효과를 적용하여 vis에 합칩니다.
+        cv2.addWeighted(overlay, 0.7, vis, 0.3, 0, vis)
+        
     # 맵 그리기
     def create_grid(self):
         rows, cols = self.map_array.shape
@@ -66,90 +84,18 @@ class Simulator:
             cv2.fillPoly(vis, [triangle_cnt], (0, 0, 0))  # 검은색 삼각형
 
                    
-    # # 로봇 출발지, 도착지 그리기
-    # def draw_start_goal(self, vis):
-    #     overlay = vis.copy()
-    #     for robot_id, info in self.robot_info.items():
-    #         start = info.get('start')
-    #         goal = info.get('goal')
-    #         color = self.colors[robot_id % len(self.colors)]
-            
-    #         # 🟪 출발지 그리기 (네모)
-    #         if start:
-    #             top_left = (start[1] * self.cell_size + self.cell_size // 4,
-    #                         start[0] * self.cell_size + self.cell_size // 4)
-    #             bottom_right = (start[1] * self.cell_size + self.cell_size * 3 // 4,
-    #                             start[0] * self.cell_size + self.cell_size * 3 // 4)
-    #             cv2.rectangle(overlay, top_left, bottom_right, color, -1)
-
-    #         # 🔺 도착지 그리기 (삼각형)
-    #         if goal:
-    #             center_x = goal[1] * self.cell_size + self.cell_size // 2
-    #             center_y = goal[0] * self.cell_size + self.cell_size // 2
-    #             pts = np.array([
-    #                 (center_x, center_y - self.cell_size // 4),
-    #                 (center_x - self.cell_size // 4, center_y + self.cell_size // 4),
-    #                 (center_x + self.cell_size // 4, center_y + self.cell_size // 4)
-    #             ], np.int32)
-    #             cv2.fillPoly(overlay, [pts], color)
-                
-    #     # ✅ 반투명으로 합치기
-    #     cv2.addWeighted(overlay, 0.3, vis, 0.7, 0, vis)
-       
-    # 로봇 경로 그리기
-    # def draw_paths(self, vis):
-    #     overlay = vis.copy()
-    #     for robot_id, info in self.robot_info.items():
-    #         color = self.colors[robot_id % len(self.colors)]
-
-    #         past_path = self.robot_past_paths.get(robot_id, [])
-    #         current_path = info['path'] if info['path'] else []
-
-    #         # 🔥 경로 연결할 리스트
-    #         full_path = []
-
-    #         if past_path:
-    #             full_path.extend(past_path)
-
-    #         if current_path:
-    #             # 🔥 지나온 마지막 위치와 새로운 경로 첫 위치가 다르면, 연결 끊기
-    #             if not past_path or past_path[-1] == current_path[0]:
-    #                 full_path.extend(current_path)
-    #             else:
-    #                 print(f"Robot {robot_id}: Path discontinuity detected. Not connecting past and current paths.")
-    #                 # 지나온 경로 그린 다음, 새 경로는 따로 그린다.
-
-    #         # 🔥 경로 그리기
-    #         for i in range(1, len(full_path)):
-    #             p1 = (full_path[i-1][1] * self.cell_size + self.cell_size // 2, full_path[i-1][0] * self.cell_size + self.cell_size // 2)
-    #             p2 = (full_path[i][1] * self.cell_size + self.cell_size // 2, full_path[i][0] * self.cell_size + self.cell_size // 2)
-    #             cv2.line(overlay, p1, p2, color, thickness=3)
-
-    #     cv2.addWeighted(overlay, 0.3, vis, 0.7, 0, vis)
-
     # 한 프레임 그리기
     def run_once(self):
         self.vis = self.create_grid()  # 배경(맵) 먼저 그림
         
-        # self.draw_paths(self.vis)          # 경로 먼저 그리기
-        # self.draw_start_goal(self.vis)      # 출발지, 도착지 그리기
+   # 출발지, 도착지 그리기
+        self.draw_home_positions(self.vis)
         self.draw_robots(self.vis)                  # 로봇(보간 이동) 그리기
         
         if not self.paused:
             self.tick()  # 로봇 이동 처리 및 위치 기록
         
         cv2.imshow("Simulator", self.vis)
-    
-    # 로봇 경로 보간
-    # def get_interpolated_position(self):
-    #     if not self.path or self.current_index >= len(self.path) - 1:
-    #         return self.path[-1]
-
-    #     current_pos = np.array(self.path[self.current_index])
-    #     next_pos = np.array(self.path[self.current_index + 1])
-    #     progress = self.substep / self.substeps_per_move
-    #     interp_pos = (1 - progress) * current_pos + progress * next_pos
-    #     return interp_pos
     
     # 도착시 콜백 등록
     def register_arrival_callback(self, func):
@@ -226,22 +172,10 @@ class Robot:
             print(f"[Robot {self.robot_id}] 이동 중 → 기존 명령 유지, queue 덮어쓰기")
             self.command_queue = command_list  # ✅ 리스트 그대로 받음
         else:
-            print(f"[Robot {self.robot_id}] 정지 상태 → 명령 즉시 실행")
+            #print(f"[Robot {self.robot_id}] 정지 상태 → 명령 즉시 실행")
             self.current_command = command_list.pop(0) if command_list else None
             self.command_queue = command_list
-
-    # def execute_command(self, command):
-    #     if command == "forward":
-    #         self.move_forward()
-    #     elif command == "left":
-    #         self.turn_left()
-    #     elif command == "right":
-    #         self.turn_right()
-    #     elif command == "stop":
-    #         print(f"[Robot {self.robot_id}] 정지.")
-    #     else:
-    #         print(f"[Robot {self.robot_id}] 알 수 없는 명령: {command}")
-            
+     
     def parse_compressed_command(self, compressed_command):
         result = []
         i = 0
@@ -390,3 +324,60 @@ class Robot:
         else:
             print(f"[Robot {self.robot_id}] 알 수 없는 명령어: {command}")
 
+# --- mode_simulator.py 일부 (Simulator 정의 아래에 추가) ---
+
+class LocalControllerStub:
+    """
+    ScenarioManager가 기대하는 컨트롤러 인터페이스의 초간단 스텁.
+    - start_sequence(cmd_map): 로봇별 명령 큐를 세팅
+    - is_executing(rid): 해당 로봇에 수행중 명령이 있는지
+    - poll(): 한 틱에 한 스텝씩 소비하고, 모두 소비되면 sequence_completion_callback 호출
+    """
+    def __init__(self, sim):
+        self.sim = sim
+        self._queues = {}  # rid -> [cmds]
+        self._active = False
+        self.sequence_completion_callback = None
+        self.robot_completion_callback = None
+
+    def start_sequence(self, cmd_map, step_cell_plan=None):
+        self._queues = {str(rid): list(cmds) for rid, cmds in cmd_map.items()}
+        self._active = True
+
+    def is_executing(self, rid):
+        return bool(self._queues.get(str(rid)))
+
+    def poll(self):
+        if not self._active:
+            return
+        # 한 틱에 로봇별로 명령 1개씩 소비 (여기서는 실제 이동/애니는 생략)
+        for rid, q in list(self._queues.items()):
+            if q:
+                q.pop(0)
+                # 필요하면 여기서 sim에 한 칸 이동 등 간단한 반영 가능
+                if not q and self.robot_completion_callback:
+                    self.robot_completion_callback(rid)
+        # 전체 완료 체크
+        if not any(self._queues.values()):
+            self._active = False
+            if self.sequence_completion_callback:
+                self.sequence_completion_callback()
+
+    def set_sequence_completion_callback(self, cb): self.sequence_completion_callback = cb
+    def set_robot_completion_callback(self, cb): self.robot_completion_callback = cb
+
+
+class TagSynth:
+    """
+    시뮬레이터의 로봇 상태를 시나리오 매니저가 먹는 tag_info 형태로 변환.
+    """
+    def __init__(self, sim):
+        self.sim = sim
+
+    def get_tag_info(self):
+        out = {}
+        # sim.robots: {rid: RobotObj}, RobotObj.get_position() -> (row, col) 가정
+        for rid, rob in self.sim.robots.items():
+            r, c = map(int, rob.get_position())
+            out[int(rid)] = {"status": "On", "grid_position": (r, c)}
+        return out

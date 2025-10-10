@@ -7,15 +7,13 @@ from config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
 import threading
 
 
-# ===== Barrier-step sync (모든 로봇 동시 한 스텝씩) =====
-current_step = 0
-max_steps = 0
-step_inflight = set()    # 이번 스텝 전송 대상(완료 대기)
-step_done = set()        # 이번 스텝 완료한 로봇
-
-# 직진 전 보정 임계값
-DIRECTION_CORR_THRESHOLD_DEG = 3.0   # 방향오차 임계(도)
-
+client = None
+MQTT_TOPIC_COMMANDS_ = None
+def attach_mqtt(mqtt_client, topic_commands):
+    global client, MQTT_TOPIC_COMMANDS_
+    client = mqtt_client
+    MQTT_TOPIC_COMMANDS_ = topic_commands
+    
 # 정렬 명령 간 딜레이 (카메라 프레임 처리 보장용) DEBUG on_message
 alignment_delay_sec = 0.8
 
@@ -24,9 +22,6 @@ inflight = {}                  # rid -> bool (현재 1개 명령 수행중인지
 
 DONE_TOPIC = "robot/done"
 
-
-# 이번 스텝에서 '방향 보정 + 직진(2단계)'을 보낸 로봇들 → MOVE 완료까지 기다리기
-step_wait_for_move = set()
 
 robot_command_map = {}     # 전체 명령
 robot_indices = {}         # 현재 인덱스
@@ -38,7 +33,13 @@ active = False             # 실행 중 여부
 current_step = 0           # 현재 스텝 인덱스(0-based)
 max_steps = 0              # 전체 스텝 수 (로봇별 명령 길이 중 최대)
 step_inflight = set()      # 이번 스텝 명령을 보낸 로봇들(완료 대기 대상)
-step_done = set()          # 이번 스텝 완료한 로봇들
+step_done = set()
+
+# 직진 전 방향 보정 임계각 (deg)
+DIRECTION_CORR_THRESHOLD_DEG = 5.0
+# 이번 스텝에서 '방향 보정 + 직진(2단계)'을 보낸 로봇들 → MOVE 완료까지 기다리기
+step_wait_for_move = set()
+          # 이번 스텝 완료한 로봇들
 
 # 정렬 반복 관련
 alignment_pending = {}
@@ -202,102 +203,119 @@ def send_next_command(robot_id):
         robot_indices[robot_id] += 1
     else:
         print(f"✅ [Robot_{robot_id}] 모든 명령 완료")
+        
+        
+def _build_corrected_cmd(robot_id, cmd):
+    out = cmd
+    if cmd.startswith(("R", "L")) and tag_info_provider:
+        tag_info = tag_info_provider()
+        tag = tag_info.get(int(robot_id))
+        hd = last_heading.get(robot_id, 0)
+        if tag and "yaw_front_deg" in tag:
+            delta = tag.get("heading_offset_deg", 0)
+            base_angle = 90
+            if (delta > 0 and cmd.startswith("R")) or (delta < 0 and cmd.startswith("L")):
+                corrected_angle = base_angle - abs(delta)
+            else:
+                corrected_angle = base_angle + abs(delta)
+            corrected_angle = max(0, round(corrected_angle, 1))
+            out = f"{cmd[0]}{corrected_angle}"
+        # heading 갱신
+        if out.startswith("R"):
+            last_heading[robot_id] = (last_heading.get(robot_id, 0) + 1) % 4
+        elif out.startswith("L"):
+            last_heading[robot_id] = (last_heading.get(robot_id, 0) - 1) % 4
+    elif cmd.startswith("T"):
+        last_heading[robot_id] = (last_heading.get(robot_id, 0) + 2) % 4
+    return out
+
 
 def _send_step_commands():
+    """current_step의 명령을 '동시에' 전송한다 (이번 스텝에 명령이 존재하고, 개별 일시정지 상태가 아닌 로봇만)."""
     global step_inflight, step_done, active
-
     step_inflight = set()
     step_done = set()
 
+    # 이번 스텝에 명령이 있는 로봇들
     participants = [rid for rid, cmds in robot_command_map.items() if current_step < len(cmds)]
     if not participants:
-        print("\n✅ [모든 명령 전송 완료] (no participants)")
+        print("\n✅ [모든 명령 전송 완료] (no participants for this step)")
         active = False
         return
 
+    # 일시정지된 로봇은 이번 스텝 전송 대상에서 제외
     actual_targets = [rid for rid in participants if rid not in paused_robots]
     if not actual_targets:
-        print(f"⏸ 모든 대상이 일시정지 → Step {current_step+1}/{max_steps} 대기")
+        print(f"⏸ 모든 대상이 일시정지 상태 → Step {current_step+1}/{max_steps} 대기")
         return
 
-    tag_info = tag_info_provider() if tag_info_provider else {}
-    north = tag_info.get(NORTH_TAG_ID, {}) if tag_info else {}
-
+    # 각 로봇에게 이번 스텝의 명령 1개씩 전송
+    
     for rid in actual_targets:
         cmd_raw = robot_command_map[rid][current_step]
-        cmd = cmd_raw
+        cmd = _build_corrected_cmd(rid, cmd_raw)
 
-        # 🔹 Stay: 전송 없이 즉시 완료 처리
-        if cmd == "Stay":
-            print(f"⏸ [Step {current_step+1}/{max_steps}] [Robot_{rid}] → Stay (즉시 완료)")
-            inflight[rid] = False
-            robot_indices[rid] = current_step + 1
-            step_inflight.add(rid)   # 이번 스텝의 '대상'에는 포함
-            step_done.add(rid)       # 곧바로 완료 처리
-            if rid in step_wait_for_move:
-                step_wait_for_move.discard(rid)
-            continue
+    # 기본은 단일 명령
+    command_set = [{"command": cmd}]
+    two_stage = False
 
-        # (아래 기존 F 전 보정/일반 전송 로직은 그대로 유지)
-        dist = tag_info.get(int(rid), {}).get("dist_cm", None) if tag_info else None
-        delta = tag_info.get(int(rid), {}).get("heading_offset_deg", None) if tag_info else None
-
-        command_set = [{"command": cmd}]
-        two_stage = False
-        try:
-            if cmd.startswith("F") and tag_info and delta is not None and abs(float(delta)) >= DIRECTION_CORR_THRESHOLD_DEG:
+    # 직진 전 방향오차 보정 필요 여부 확인
+    try:
+        if cmd.startswith("F") and tag_info_provider is not None:
+            tag_info = tag_info_provider()
+            tag = tag_info.get(int(rid), {})
+            delta = tag.get("heading_offset_deg", None)
+            if delta is not None and abs(float(delta)) >= DIRECTION_CORR_THRESHOLD_DEG:
                 angle = round(abs(float(delta)), 1)
+                # delta>0 이면 시계 방향으로 틀어진 상태 → 반시계(L)로 보정
                 pre_cmd = f"{'L' if float(delta) > 0 else 'R'}{angle}_modeOnly"
                 command_set = [{"command": pre_cmd}, {"command": cmd}]
                 two_stage = True
-        except Exception:
-            command_set = [{"command": cmd}]
-            two_stage = False
+    except Exception as _e:
+        # 안전장치: 문제 발생 시 보정 없이 단일 명령만 전송
+        command_set = [{"command": cmd}]
+        two_stage = False
 
-        payload = json.dumps({
-            "commands": [{
-                "robot_id": rid,
-                "command_count": len(command_set),
-                "command_set": command_set,
-            }]
-        })
+    payload = json.dumps({
+        "commands": [{
+            "robot_id": rid,
+            "command_count": len(command_set),
+            "command_set": command_set,
+        }]
+    })
+    # 로그는 대표 명령만 표시
+    if two_stage:
+        print(f"📤 [Step {current_step+1}/{max_steps}] [Robot_{rid}] → (dir-fix + {cmd})")
+        step_wait_for_move.add(rid)
+    else:
+        print(f"📤 [Step {current_step+1}/{max_steps}] [Robot_{rid}] → {cmd}")
+        if rid in step_wait_for_move:
+            step_wait_for_move.discard(rid)
 
-        if two_stage:
-            print(f"📤 [Step {current_step+1}/{max_steps}] [Robot_{rid}] → (dir-fix + {cmd})")
-            step_wait_for_move.add(rid)
-        else:
-            print(f"📤 [Step {current_step+1}/{max_steps}] [Robot_{rid}] → {cmd}")
-            if rid in step_wait_for_move:
-                step_wait_for_move.discard(rid)
+    client.publish(MQTT_TOPIC_COMMANDS_, payload)
+    inflight[rid] = True
+    robot_indices[rid] = current_step + 1  # 진행률(보고용)을 스텝 기준으로 맞춰줌
+    step_inflight.add(rid)
 
-        client.publish(MQTT_TOPIC_COMMANDS_, payload)
-        inflight[rid] = True
-        robot_indices[rid] = current_step + 1
-        step_inflight.add(rid)
 
     if step_inflight:
         print(f"▶ Step {current_step+1}/{max_steps} 전송 대상: {sorted(list(step_inflight))}")
-
-    # 🔹 이번 스텝이 전부 'Stay'였거나, Stay만 남은 경우 즉시 다음 스텝으로
-    if step_inflight and step_done >= step_inflight:
-        _advance_step_if_ready()
-
-
+    else:
+        print(f"⏸ 이번 스텝({current_step+1}) 전송 대상 없음 (모두 일시정지)")
 
 def _advance_step_if_ready():
-    """이번 스텝 대상 전원이 완료되면 다음 스텝으로."""
+    """이번 스텝 대상 전원이 완료되면 다음 스텝 전송."""
     global current_step, active
     if not active:
         return
     if step_inflight and step_done >= step_inflight:
-        print(f"\n✅ Step {current_step+1}/{max_steps} 전체 완료 → 다음 스텝")
+        print(f"\n✅ Step {current_step+1}/{max_steps} 전체 완료 → 다음 스텝 준비")
         current_step += 1
         if current_step >= max_steps:
             print("\n✅ [모든 명령 전송 완료] (max steps reached)")
             active = False
             return
         _send_step_commands()
-
 
 
 def check_all_completed():
@@ -437,47 +455,51 @@ def on_message(client, userdata, msg):
                         alignment_pending[robot_id]["in_progress"] = False
 
                 threading.Thread(target=repeat_wrapper_dir, daemon=True).start()
-                
-        # 3) 중앙 정렬 처리: 반복만, 후속 명령 전송 없음
+
+        # --------------------------------------------------------------------------------
+        # 3) 중앙 정렬 반복 (MOVE 완료 기준)
+        # --------------------------------------------------------------------------------
         if robot_id in alignment_pending:
             info = alignment_pending[robot_id]
-            if info["mode"] == "center":
-                in_progress = info.get("in_progress", False)
+            mode = info["mode"]
+            in_progress = info.get("in_progress", False)
 
-                # 완료 조건
+            if mode == "center" and "cmd=MOVE" in payload:
+                print(f"📍 중앙정렬 직진 완료 메시지 감지: {payload}")
+
                 if check_center_alignment_ok(robot_id):
                     print(f"✅ 중앙정렬 완료: Robot_{robot_id}")
                     clear_alignment_pending(robot_id)
-                    # 모두 끝났는지 안내 (옵션)
-                    if all(i["mode"] != "center" for i in alignment_pending.values()):
+                    if all(info["mode"] != "center" for info in alignment_pending.values()):
                         print("✅ 모든 로봇 중앙정렬 완료")
                     return
 
-                # 이미 반복 중이면 스킵
                 if in_progress:
                     print(f"⚠️ 이미 반복 중 → 건너뜀: Robot_{robot_id}")
                     return
 
-                # 재시도 스케줄
                 alignment_pending[robot_id]["in_progress"] = True
+
                 def repeat_wrapper_center():
+                    print("🔁 중앙정렬 재시도 시작")
                     time.sleep(alignment_delay_sec)
+
                     if check_center_alignment_ok(robot_id):
                         print(f"✅ 중앙정렬 완료 (지연 후 재확인): Robot_{robot_id}")
                         clear_alignment_pending(robot_id)
                         return
+
                     tag_info = tag_info_provider()
                     send_center_align(
                         client, tag_info, MQTT_TOPIC_COMMANDS_,
                         targets=[int(robot_id)],
                         alignment_pending=alignment_pending
                     )
+
                     if robot_id in alignment_pending:
                         alignment_pending[robot_id]["in_progress"] = False
 
                 threading.Thread(target=repeat_wrapper_center, daemon=True).start()
-                return
-
 
         # --------------------------------------------------------------------------------
         # 4) 로봇별 일시정지 상태면 다음 전송 보류
@@ -490,22 +512,26 @@ def on_message(client, userdata, msg):
         # --------------------------------------------------------------------------------
         # 5) 일반 명령 진행
         # --------------------------------------------------------------------------------
-        if active and robot_id in step_inflight:
-            # (회전 modeOnly → 직진) 두 단계 전송한 경우: MOVE DONE에서만 카운트
-            if robot_id in step_wait_for_move:
-                if "cmd=MOVE" in payload:
-                    step_done.add(robot_id)
-                    inflight[robot_id] = False
-                    step_wait_for_move.discard(robot_id)
-                    print(f"🟢 [Step {current_step+1}/{max_steps}] 완료 수신(MOVE 최종): {sorted(step_done)} / {sorted(step_inflight)}")
-                    _advance_step_if_ready()
+        
+if active and robot_id in step_inflight:
+    # 두 단계(step)로 보낸 경우: ROTATE(modeOnly) DONE은 무시하고 MOVE DONE에서만 카운트
+    if robot_id in step_wait_for_move:
+        if "cmd=MOVE" in payload:
+            step_done.add(robot_id)
+            inflight[robot_id] = False
+            step_wait_for_move.discard(robot_id)
+            print(f"🟢 [Step {current_step+1}/{max_steps}] 완료 수신(MOVE 최종): {sorted(step_done)} / {sorted(step_inflight)}")
+            _advance_step_if_ready()
+        else:
+            # ROTATE 완료 → 다음 DONE(MOVE)까지 대기
+            pass
+    else:
+        step_done.add(robot_id)
+        inflight[robot_id] = False
+        print(f"🟢 [Step {current_step+1}/{max_steps}] 완료 수신: {sorted(step_done)} / {sorted(step_inflight)}")
+        _advance_step_if_ready()
+    
 
-            # 일반 케이스: DONE 즉시 카운트
-            else:
-                step_done.add(robot_id)
-                inflight[robot_id] = False
-                print(f"🟢 [Step {current_step+1}/{max_steps}] 완료 수신: {sorted(step_done)} / {sorted(step_inflight)}")
-                _advance_step_if_ready()
 
 
 
@@ -534,7 +560,7 @@ def init_mqtt_client():
 
     client = c
     print(f"[MQTT] connected and subscribed: {IP_address_}:{MQTT_PORT}, topic='{DONE_TOPIC}'")
-    return client
+    client
 
 def on_connect(client, userdata, flags, rc):
     client.subscribe(DONE_TOPIC)
@@ -553,19 +579,18 @@ def start_sequence(cmd_map):
     paused = False
     active = True
 
-    # 배리어 스텝 수 = 로봇별 명령 길이의 최대
+    # 배리어 스텝 카운트
     max_steps = max((len(v) for v in robot_command_map.values()), default=0)
     current_step = 0
     step_inflight = set()
     step_done = set()
-    step_wait_for_move.clear()
 
     if max_steps == 0:
         print("⚠️ 전송할 명령이 없습니다.")
         active = False
         return
 
-    print(f"▶ 배리어 모드 시작: 총 스텝 {max_steps}, 대상 {sorted(list(robot_command_map.keys()))}")
+    print(f"▶ 배리어 모드 시작: 총 스텝 {max_steps}, 대상 로봇 {sorted(list(robot_command_map.keys()))}")
     _send_step_commands()
 
 
