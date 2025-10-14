@@ -182,7 +182,7 @@ class CenterWidget(BoxLayout):
         lower_section.add_widget(grid_group)
 
         toggle_group = GroupBox(title="모드 전환",size_hint_y=1/6)
-        for text, cmd in [("수동 모드", "manual_toggle"), ("GoalAlign", "goalalign_toggle")]:
+        for text, cmd in [("수동 모드", "manual_toggle")]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
             toggle_group.content.add_widget(btn)

@@ -11,7 +11,7 @@
 import json
 import time
 import threading
-from align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
+from OpenCV.code.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
 from typing import Optional, Callable
 import math  # 추가
 import numpy as np  # 추가

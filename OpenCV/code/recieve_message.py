@@ -2,8 +2,8 @@
 import time
 import json
 import paho.mqtt.client as mqtt
-from align import send_center_align, send_north_align 
-from config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
+from OpenCV.code.align import send_center_align, send_north_align 
+from OpenCV.code.config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
 import threading
 
 

@@ -29,8 +29,8 @@ class LeftWidget(BoxLayout):  # BoxLayout(orientation='vertical')으로도 가�
 
         for i in range(1, 5):
             robot_box = BoxLayout(orientation='vertical', size_hint_y=None, height=160)
-            robot_box.add_widget(make_darkcell(f"ID:{i}"))
-            for label_text in ["구동 속도", "구동 방향", "목표 위치"]:
+            robot_box.add_widget(make_darkcell(f"D{i}"))
+            for label_text in ["목표 위치","Delay"]:
                 row = GridLayout(cols=2, size_hint_y=None, height=30)
                 row.add_widget(make_darkcell(label_text))
                 row.add_widget(make_brightcell(""))
@@ -38,8 +38,6 @@ class LeftWidget(BoxLayout):  # BoxLayout(orientation='vertical')으로도 가�
 
             self.inner_layout.add_widget(robot_box)
 
-        # 빈 공간 추가
-        self.inner_layout.add_widget(Widget(size_hint_y=1))
 
         self.add_widget(self.inner_layout)
 

@@ -9,7 +9,7 @@ os.environ["SHOW_CV_WINDOWS"] = "1"  # 0: 비활성화, 1: 활성화
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 2) 이제 백엔드 import (환경변수 적용된 상태로 로드됨)
-import OpenCV.code.main as backend
+import OpenCV.code.main_merge as backend
 
 from kivy.app import App
 from kivy.core.window import Window

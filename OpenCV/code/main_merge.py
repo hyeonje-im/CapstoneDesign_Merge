@@ -5,26 +5,43 @@ import numpy as np
 import subprocess 
 import math
 import time
+from queue import Queue, Empty
+
+# UI 연동 관련
+
+SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
+
+_KEYQ: "Queue[int]" = Queue()
+
+def push_keycode(code: int):
+    """외부(Kivy)에서 보낸 가상 키코드를 백엔드에 전달"""
+    _KEYQ.put(code)
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 ICBS_PATH = os.path.join(CURRENT_DIR, '..', 'MAPF-ICBS', 'code')
 sys.path.append(os.path.normpath(ICBS_PATH))
 
 
-from grid import load_grid, GRID_FOLDER
-from interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths,draw_home_positions
-from config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
-from visionsystem_mjk import VisionSystem 
-from vision.camera import camera_open, Undistorter 
-from cbs.pathfinder import PathFinder, Agent
-from RobotController_merge import RobotController
-from config import cell_size_cm
-from manual_mode import ManualPathSystem  
-from recieve_message import set_tag_info_provider
-from ScenarioManager import ScenarioManager
-from TestMode import TestMode
-from RandomMode import RandomMode
-  
+from OpenCV.code.grid import load_grid, GRID_FOLDER
+from OpenCV.code.interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths,draw_home_positions
+from OpenCV.code.config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
+from OpenCV.code.visionsystem_mjk import VisionSystem 
+from OpenCV.code.vision.camera import camera_open, Undistorter 
+from OpenCV.code.cbs.pathfinder import PathFinder, Agent
+from OpenCV.code.RobotController_merge import RobotController
+from OpenCV.code.config import cell_size_cm
+from OpenCV.code.manual_mode import ManualPathSystem  
+from OpenCV.code.recieve_message import set_tag_info_provider
+from OpenCV.code.ScenarioManager import ScenarioManager
+from OpenCV.code.TestMode import TestMode
+from OpenCV.code.RandomMode import RandomMode
+from OpenCV.code.ui_bridge import FrameBus, get_cmd_nowait
+
+
 SELECTED_RIDS = set()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +75,7 @@ _mode_idx = [0]  # 가변 캡쳐용(리스트)
 USE_MQTT = 1  # 0: 비사용, 1: 사용
 
 if USE_MQTT:
-    from recieve_message import init_mqtt_client
+    from OpenCV.code.recieve_message import init_mqtt_client
     client = init_mqtt_client()   # ← recieve_message의 '그' 클라이언트 단일 사용
 else:
     MQTT_TOPIC_COMMANDS_ = None
@@ -100,6 +117,15 @@ def correction_trackbar_callback(val):
     global correction_coef_value
     correction_coef_value = val / 100.0
     print(f"[INFO] 실시간 보정계수: {correction_coef_value:.2f}")
+
+if SHOW_CV_WINDOWS:
+    cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
+    cv2.createTrackbar(
+        "Correction Coef", "CorrectionPanel",
+        int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
+    )
+correction_trackbar_callback(int(CORRECTION_COEF * 100))
+
 
 cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
 cv2.createTrackbar(
@@ -438,11 +464,12 @@ def main():
     slider_create()
     detect_params = slider_value()
 
-    cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("Video_display", vision.mouse_callback)
-    cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("CBS Grid", unified_mouse)  # ← 수동 모드 대응
-    controller.set_board_info_provider(lambda: vision.board_result) # <<< [추가]
+    if SHOW_CV_WINDOWS:
+        cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("Video_display", vision.mouse_callback)
+        cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("CBS Grid", unified_mouse)  # ← 수동 모드 대응
+        controller.set_board_info_provider(lambda: vision.board_result) # <<< [추가]
 
     while True:
         path_viz_data = controller.get_current_step_info()
@@ -477,15 +504,146 @@ def main():
         if any("grid_position" in data for data in visionOutput["tag_info"].values()):
             update_agents_from_tags(visionOutput["tag_info"])
 
+
+        # UI 연동
+        # =============================
+        # =============================
+        FrameBus.set_video(frame)
+        FrameBus.set_grid(vis)
+
+        # UI 명령 처리 (버튼 클릭, 키 입력 등)
+        # =============================
+        # =============================
+        cmd, kwargs = get_cmd_nowait()
+        if cmd == "select_robot":                 # (로봇 선택 버튼, 숫자키 1~4와 유사 동작)
+            rid = int(kwargs["rid"])
+            SELECTED_RIDS.clear()
+            SELECTED_RIDS.add(rid)
+            print(f"[UI] 선택 로봇 동기화 → {sorted(SELECTED_RIDS)}")
+
+        elif cmd == "compute_cbs":                # 키: 'c'
+            compute_cbs()
+
+        elif cmd == "lock_board":                 # 키: 'n'
+            vision.lock_board()
+            print("[UI] 보드 고정됨")
+
+        elif cmd == "unlock_board":               # 키: 'b'
+            vision.reset_board()
+            print("[UI] 보드 고정 해제")
+
+        elif cmd == "toggle_visualization":       # 키: 'v'
+            vision.toggle_visualization()
+            print(f"[UI] 시각화 모드: {'ON' if vision.visualize else 'OFF'}")
+
+        elif cmd == "start_roi_selection":        # 키: 's'
+            vision.start_roi_selection()
+            print("[UI] ROI 재선택 시작")
+
+        elif cmd == "center_align":               # 키: 'a'
+            send_release_all(client, PRESET_IDS)
+            controller.run_center_align(PRESET_IDS, do_release=False)
+            print("[UI] 센터 정렬 전송")
+
+        elif cmd == "direction_align":            # 키: 'f'
+            send_release_all(client, PRESET_IDS)
+            controller.run_direction_align(PRESET_IDS, do_release=False)
+            print("[UI] 방향 정렬 전송")
+
+        elif cmd == "pause":                      # 키: 't'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.pause([str(r) for r in targets])
+                print(f"[UI] 정지: {targets}")
+            else:
+                print("[UI] 정지 대상 없음")
+
+        elif cmd == "resume":                     # (키: 기본 없음, 과거 'y'와 유사 동작)
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.resume([str(r) for r in targets])
+                print(f"[UI] 재개: {targets}")
+            else:
+                print("[UI] 재개 대상 없음")
+
+        elif cmd == "immediate_stop":             # 키: 'u'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                immediate_stop(client, targets)
+                print(f"[UI] 즉시정지: {targets}")
+            else:
+                print("[UI] 즉시정지 대상 없음")
+
+        elif cmd == "save_grid":                  # 키: 'g'
+            saved = None
+            if vision.obstacle_detector is not None and vision.obstacle_detector.last_occupancy is not None:
+                saved = vision.obstacle_detector.save_grid(save_dir=GRID_FOLDER)
+            print(f"[UI] Grid 저장: {saved}" if saved else "[UI] 저장할 Grid 없음")
+
+        elif cmd == "reset_all":                  # 키: 'r'
+            agents.clear()
+            paths.clear()
+            manual.reset_paths()
+            print("[UI] Reset all")
+
+        elif cmd == "manual_toggle":              # 키: 'z'
+            manual.toggle_mode()
+            print(f"[UI] 수동 모드: {'ON' if manual.is_manual_mode() else 'OFF'}")
+
+        elif cmd == "quit":                       # 키: 'q'
+            raise SystemExit("[UI] Quit 요청")
+
+        elif cmd == "toggle_scenario_mode":          # 키: 'm'
+            _mode_idx[0] = (_mode_idx[0] + 1) % len(_mode_keys)
+            name = _mode_keys[_mode_idx[0]]
+            scenario.set_mode(MODE_FACTORY[name]())
+            print(f"[UI][Scenario] mode ← {name} (실행상태는 유지)")
+
+        elif cmd == "toggle_scenario_run":           # 키: Spacebar
+            scenario.toggle_enabled()
+            print(f"[UI][Scenario] 실행 상태: {'ON' if scenario.enabled else 'OFF'}")
+
+        elif cmd == "resume":                        # 키: 'y'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.resume([str(r) for r in targets])
+                for r in targets:
+                    PROXIMITY_STOP_LATCH.discard(int(r))
+                print(f"[UI] 재개: {targets}")
+            else:
+                print("[UI] 재개 대상 없음")
+
+        elif cmd == "set_goal":                   # (그리드 클릭, 키 없음)
+            rid = int(kwargs["rid"])
+            row = int(kwargs["row"])
+            col = int(kwargs["col"])
+            tgt = next((a for a in agents if a.id == rid), None)
+            if tgt is None:
+                print(f"[UI] set_goal 실패: 에이전트 {rid} 없음")
+            else:
+                tgt.goal = (row, col)
+                print(f"[UI] 로봇 {rid} 목표=({row},{col}) 설정")
+
+        # =============================
+        # =============================
+
+
         # UI 시각화 화면
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
         manual.draw_overlay(vis)  # ← 수동 경로 오버레이
 
-        cv2.imshow("CBS Grid", vis)
-        cv2.imshow("Video_display", frame)
+        if SHOW_CV_WINDOWS:
+            cv2.imshow("CBS Grid", vis)
+            cv2.imshow("Video_display", frame)
+            key = cv2.waitKey(1)
 
-        key = cv2.waitKey(1)
+        else: 
+            try:
+                key = _KEYQ.get_nowait()
+            except Empty:
+                key = -1
+                
         if key == ord('q'):
             break
         elif key == ord('r'):

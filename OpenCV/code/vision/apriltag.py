@@ -2,7 +2,7 @@
 import numpy as np
 from pupil_apriltags import Detector
 import cv2
-from config import dist_coeffs, object_points, tag_role
+from OpenCV.code.config import dist_coeffs, object_points, tag_role
 import time
 
 class AprilTagDetector:

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Protocol, TypedDict, Dict, List, Set, Tuple, Optional, Callable
 import numpy as np
-from cbs.pathfinder import PathFinder, Agent  # 기존 PathFinder를 Planner로 활용
+from OpenCV.code.cbs.pathfinder import PathFinder, Agent  # 기존 PathFinder를 Planner로 활용
 import threading
 import time, random
 
