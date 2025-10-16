@@ -116,12 +116,8 @@ class CenterWidget(BoxLayout):
             self.bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self.update_bg_and_border, size=self.update_bg_and_border)
 
-        # ================= 상단 (0.35) =================
-        upper_section = BoxLayout(orientation='vertical', size_hint_y=0.45, spacing=5)
-        upper_section.add_widget(make_brightcell("총 로봇 대수"))
-        self.robot_count_cell = make_brightcell("0")
-        upper_section.add_widget(self.robot_count_cell)
-        upper_section.add_widget(Widget(size_hint_y=None, height=10))
+        
+        upper_section = BoxLayout(orientation='vertical', size_hint_y=0.4, spacing=5)
 
         # Grid + 버튼 나란히 배치
         grid = BoxLayout(orientation="horizontal", size_hint_y=0.8, spacing=5)
@@ -135,11 +131,9 @@ class CenterWidget(BoxLayout):
         grid.add_widget(grid_container)
         upper_section.add_widget(grid)
 
-        # 더미 공간 (0.05)
-        upper_section.add_widget(Widget(size_hint_y=0.05))
 
         # ================= 하단 (0.65) =================
-        lower_section = BoxLayout(orientation='vertical', size_hint_y=0.5, spacing=5)
+        lower_section = BoxLayout(orientation='vertical', size_hint_y=0.6, spacing=5)
 
         # GroupBoxes
 

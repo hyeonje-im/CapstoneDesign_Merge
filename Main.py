@@ -3,7 +3,7 @@ import os
 import threading
 
 # 1) OpenCV 창 비활성화를 "import 전에" 설정
-os.environ["SHOW_CV_WINDOWS"] = "1"  # 0: 비활성화, 1: 활성화
+os.environ["SHOW_CV_WINDOWS"] = "0"  # 0: 비활성화, 1: 활성화
 
 # 현재 파일 기준 상대 임포트가 필요하면 유지
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

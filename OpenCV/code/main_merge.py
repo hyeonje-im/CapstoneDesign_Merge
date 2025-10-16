@@ -72,7 +72,7 @@ _mode_idx = [0]  # 가변 캡쳐용(리스트)
 
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
-USE_MQTT = 1  # 0: 비사용, 1: 사용
+USE_MQTT = 0  # 0: 비사용, 1: 사용
 
 if USE_MQTT:
     from OpenCV.code.recieve_message import init_mqtt_client
