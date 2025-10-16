@@ -10,34 +10,30 @@ from kivy.uix.label import Label
 from Utilities.UI_utilities import KLine, make_darkcell, make_brightcell, KButton, KLabel
 from OpenCV.code.ui_bridge import FrameBus, post
 from OpenCV.code.config import grid_row, grid_col
-
 import numpy as np
 
 
 # =================== GroupBox (공통 UI 컴포넌트) ===================
 class GroupBox(BoxLayout):
     def __init__(self, title="", **kwargs):
-        super().__init__(orientation="vertical", padding=5, spacing=5,  **kwargs)
-        
+        super().__init__(orientation="vertical", padding=5, spacing=5, **kwargs)
 
         # 배경 + 라운드 테두리
         with self.canvas.before:
-            Color(0x25/255, 0x28/255, 0x3B/255, 1)  # 배경색 다크셀과 동일
+            Color(0x25 / 255, 0x28 / 255, 0x3B / 255, 1)  # 다크셀과 동일 배경
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[5])
         with self.canvas.after:
-            Color(0, 0, 0, 1)  # 검정 테두리
+            Color(0, 0, 0, 1)
             self.border = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, 5), width=1)
 
         self.bind(pos=self._update_rect, size=self._update_rect)
 
-        # 타이틀
         title_label = KLabel(
             text=title, size_hint_y=None, height=20,
             halign="center", valign="middle", font_size=13, color=(1, 1, 1, 1)
         )
         self.add_widget(title_label)
 
-        # 실제 콘텐츠 (버튼 행이 들어갈 컨테이너)
         self.content = BoxLayout(size_hint_y=1, spacing=4)
         self.add_widget(self.content)
 
@@ -49,13 +45,13 @@ class GroupBox(BoxLayout):
 
 # =================== GridTextureView ===================
 class GridTextureView(Image):
-    """FrameBus.get_grid() (BGR ndarray)를 읽어 전체 영역에 그리드 텍스처 표시 + 클릭 이벤트 처리"""
+    """FrameBus.get_grid()로부터 BGR 이미지를 받아 Texture로 표시"""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.allow_stretch = True
         self.keep_ratio = True
         self.center_widget = None
-        Clock.schedule_interval(self._update, 1/20)  # 20fps
+        Clock.schedule_interval(self._update, 1 / 20)
 
     def _update(self, dt):
         frame = FrameBus.get_grid()
@@ -63,7 +59,6 @@ class GridTextureView(Image):
             return
         rgb = frame[:, :, ::-1].copy()
         h, w = rgb.shape[:2]
-
         if not self.texture or self.texture.width != w or self.texture.height != h:
             self.texture = Texture.create(size=(w, h))
             self.texture.flip_vertical()
@@ -73,13 +68,11 @@ class GridTextureView(Image):
     def on_touch_down(self, touch):
         if not self.collide_point(*touch.pos):
             return False
-
         if not self.texture:
             return False
+
         img_w, img_h = float(self.texture.width), float(self.texture.height)
         W, H = float(self.width), float(self.height)
-
-        # keep_ratio 적용된 그려지는 영역
         s = min(W / img_w, H / img_h)
         draw_w, draw_h = img_w * s, img_h * s
         off_x, off_y = (W - draw_w) * 0.5, (H - draw_h) * 0.5
@@ -90,7 +83,6 @@ class GridTextureView(Image):
 
         u, v = lx / draw_w, ly / draw_h
         v_top = 1.0 - v
-
         col = max(0, min(grid_col - 1, int(u * grid_col)))
         row = max(0, min(grid_row - 1, int(v_top * grid_row)))
 
@@ -98,7 +90,7 @@ class GridTextureView(Image):
             post("set_goal", rid=self.center_widget.selected_robot_id, row=row, col=col)
             print(f"[UI] Grid 클릭: row={row}, col={col}, robot={self.center_widget.selected_robot_id}")
         else:
-            print("⚠️ 로봇 선택이 필요합니다. (우측 D1~D4 버튼 클릭)")
+            print("⚠️ 로봇 선택이 필요합니다. (D1~D4 버튼 클릭)")
         return True
 
 
@@ -107,36 +99,29 @@ class CenterWidget(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', size_hint_x=0.25, **kwargs)
         self.selected_robot_id = None
+        self.current_scenario_mode = "test"   # main.py 모드명과 일치
+        self.current_solver = "CBS"           # solver 기본값
 
-        # 배경/테두리
+        # 배경 / 테두리
         with self.canvas.before:
             Color(0, 0, 0, 1)
             self.border = KLine(self)
-            Color(0x2E/255, 0x33/255, 0x49/255, 1)
+            Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self.update_bg_and_border, size=self.update_bg_and_border)
 
-        
+        # ===== 상단 (GridView) =====
         upper_section = BoxLayout(orientation='vertical', size_hint_y=0.4, spacing=5)
-
-        # Grid + 버튼 나란히 배치
-        grid = BoxLayout(orientation="horizontal", size_hint_y=0.8, spacing=5)
-
-        # Grid는 상단 영역에서 0.8 비율만 차지
+        grid_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(0.8, 1))
         self.grid_view = GridTextureView(size_hint=(0.9, 0.9))
         self.grid_view.center_widget = self
-        grid_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(0.8, 1))
         grid_container.add_widget(self.grid_view)
+        upper_section.add_widget(grid_container)
 
-        grid.add_widget(grid_container)
-        upper_section.add_widget(grid)
-
-
-        # ================= 하단 (0.65) =================
+        # ===== 하단 (버튼 그룹들) =====
         lower_section = BoxLayout(orientation='vertical', size_hint_y=0.6, spacing=5)
 
-        # GroupBoxes
-
+        # 로봇 선택
         robot_group = GroupBox(title="로봇 선택", size_hint_y=1/6)
         for i in range(1, 5):
             btn = KButton(text=f"D{i}")
@@ -144,55 +129,96 @@ class CenterWidget(BoxLayout):
             robot_group.content.add_widget(btn)
         lower_section.add_widget(robot_group)
 
-
-        board_group = GroupBox(title="보드 제어",size_hint_y=1/6)
-        for text, cmd in [("보드 고정", "lock_board"), ("보드 해제", "unlock_board"),
-                          ("보드 재선택(ROI)", "start_roi_selection"), ("시각화 토글", "toggle_visualization")]:
+        # 보드 제어
+        board_group = GroupBox(title="보드 제어", size_hint_y=1/6)
+        for text, cmd in [
+            ("보드 고정", "lock_board"),
+            ("보드 해제", "unlock_board"),
+            ("보드 재선택(ROI)", "start_roi_selection"),
+            ("시각화 토글", "toggle_visualization")
+        ]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
             board_group.content.add_widget(btn)
         lower_section.add_widget(board_group)
 
-        align_group = GroupBox(title="정렬",size_hint_y=1/6)
-        for text, cmd in [("정렬(센터)", "center_align"), ("정렬(방향)", "direction_align")]:
+        # 정렬
+        align_group = GroupBox(title="정렬", size_hint_y=1/6)
+        for text, cmd in [
+            ("정렬(센터)", "center_align"),
+            ("정렬(방향)", "direction_align")
+        ]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
             align_group.content.add_widget(btn)
         lower_section.add_widget(align_group)
 
-        cbs_group = GroupBox(title="CBS 제어",size_hint_y=1/6)
-        for text, cmd in [("경로탐색", "compute_cbs"), ("정지", "pause"),
-                          ("재개", "resume"), ("즉시정지", "immediate_stop")]:
+        # CBS 제어
+        cbs_group = GroupBox(title="CBS 제어", size_hint_y=1/6)
+        for text, cmd in [
+            ("경로탐색", "compute_cbs"),
+            ("정지", "pause"),
+            ("재개", "resume"),
+            ("즉시정지", "immediate_stop")
+        ]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
             cbs_group.content.add_widget(btn)
         lower_section.add_widget(cbs_group)
 
-        grid_group = GroupBox(title="Grid 관리",size_hint_y=1/6)
+        # Grid 관리
+        grid_group = GroupBox(title="Grid 관리", size_hint_y=1/6)
         for text, cmd in [("Grid 저장", "save_grid"), ("Reset All", "reset_all")]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
             grid_group.content.add_widget(btn)
         lower_section.add_widget(grid_group)
 
-        toggle_group = GroupBox(title="모드 전환",size_hint_y=1/6)
-        for text, cmd in [("수동 모드", "manual_toggle")]:
-            btn = KButton(text=text)
-            btn.bind(on_press=lambda inst, c=cmd: post(c))
-            toggle_group.content.add_widget(btn)
-        lower_section.add_widget(toggle_group)
+        # 시나리오 제어
+        scenario_group = GroupBox(title="시나리오 제어", size_hint_y=1/6)
+        self.btn_scenario_mode = KButton(text=f"시나리오 모드: {self.current_scenario_mode}")
+        self.btn_scenario_mode.bind(on_press=self.toggle_scenario_mode)
+        scenario_group.content.add_widget(self.btn_scenario_mode)
 
-        quit_group = GroupBox(title="프로그램 종료",size_hint_y=1/6)
+        btn_scenario_run = KButton(text="시나리오 실행/정지 (Space)")
+        btn_scenario_run.bind(on_press=lambda inst: post("toggle_scenario_run"))
+        scenario_group.content.add_widget(btn_scenario_run)
+        lower_section.add_widget(scenario_group)
+
+        # MAPF 제어
+        mapf_group = GroupBox(title="MAPF 제어", size_hint_y=1/6)
+        btn_auto = KButton(text="전체 Release + Align + CBS")
+        btn_auto.bind(on_press=lambda inst: post("auto_release_align_cbs"))
+        mapf_group.content.add_widget(btn_auto)
+
+        solver_box = BoxLayout(orientation="horizontal", spacing=5)
+        btn_prev = KButton(text="<")
+        btn_next = KButton(text=">")
+        self.lbl_solver = KLabel(text=self.current_solver, font_size=14, color=(1, 1, 1, 1))
+        btn_prev.bind(on_press=lambda inst: self.change_solver("prev"))
+        btn_next.bind(on_press=lambda inst: self.change_solver("next"))
+        solver_box.add_widget(btn_prev)
+        solver_box.add_widget(self.lbl_solver)
+        solver_box.add_widget(btn_next)
+        mapf_group.content.add_widget(solver_box)
+
+        btn_disjoint = KButton(text="Disjoint 토글 (p)")
+        btn_disjoint.bind(on_press=lambda inst: post("toggle_disjoint"))
+        mapf_group.content.add_widget(btn_disjoint)
+        lower_section.add_widget(mapf_group)
+
+        # 종료
+        quit_group = GroupBox(title="프로그램 종료", size_hint_y=1/6)
         btn_quit = KButton(text="종료")
         btn_quit.bind(on_press=lambda inst: post("quit"))
         quit_group.content.add_widget(btn_quit)
         lower_section.add_widget(quit_group)
 
-        # ================= 최종 배치 =================
+        # 최종 배치
         self.add_widget(upper_section)
         self.add_widget(lower_section)
 
-    # =================== 유틸 메서드 ===================
+    # ------------------------ 유틸 메서드 ------------------------
     def select_robot(self, rid):
         self.selected_robot_id = rid
         post("select_robot", rid=rid)
@@ -202,7 +228,26 @@ class CenterWidget(BoxLayout):
         self.bg.pos, self.bg.size = self.pos, self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
 
-    def update_grid_size(self, *args):
-        parent_w = self.width
-        side = parent_w * 0.7
-        self.grid_view.size = (side, side)
+    # --- 시나리오 모드 토글 ---
+    def toggle_scenario_mode(self, instance):
+        modes = ["test", "restaurant", "random"]
+        cur_idx = modes.index(self.current_scenario_mode)
+        next_idx = (cur_idx + 1) % len(modes)
+        self.current_scenario_mode = modes[next_idx]
+        post("toggle_scenario_mode")
+        self.btn_scenario_mode.text = f"시나리오 모드: {self.current_scenario_mode}"
+        print(f"[UI] Scenario Mode → {self.current_scenario_mode}")
+
+    # --- Solver 변경 (< >) ---
+    def change_solver(self, direction):
+        solvers = ["CBS", "ICBS_CB", "ICBS"]
+        cur_idx = solvers.index(self.current_solver)
+        if direction == "next":
+            next_idx = (cur_idx + 1) % len(solvers)
+            post("solver_next")
+        else:
+            next_idx = (cur_idx - 1) % len(solvers)
+            post("solver_prev")
+        self.current_solver = solvers[next_idx]
+        self.lbl_solver.text = self.current_solver
+        print(f"[UI] Solver 변경 → {self.current_solver}")

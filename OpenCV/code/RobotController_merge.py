@@ -721,41 +721,36 @@ class RobotController:
     def set_alignment_completion_callback(self, cb):
         self._align_cb = cb  # cb(robot_id: str)
 
-    def run_align_sequence(self, preset_ids, *, do_release=False):
-        if do_release: self._release(preset_ids)
-        time.sleep(self.alignment_delay_sec)             # 도착 직후 0.3s 정지
+    def run_align_sequence(self, preset_ids, *, do_release=False, settle_sec=0.5):
+        if do_release:
+            self._release(preset_ids)
+        # (1) 센터 정렬: 단일 전송
         self.run_center_align(preset_ids, do_release=False)
 
         def _one(rid):
             rid = str(rid)
-            # (1) 센터 완료 대기
-            while True:
-                info = self.alignment_pending.get(rid)
-                if not info or info.get("mode") != "center": break
-                time.sleep(0.1)
-            if not self.check_center_alignment_ok(rid):
-                self.run_center_align([rid], do_release=False); return
-            time.sleep(self.alignment_delay_sec)      # 0.3s
 
-            # (2) 방향 정렬 시작
+            # a) 센터 pending 끝날 때까지 대기 (내부가 delay 재확인 처리)
+            while self.alignment_pending.get(rid, {}).get("mode") == "center":
+                time.sleep(0.05)
+
+            # b) 카메라 프레임 안정화 버퍼
+            time.sleep(settle_sec)
+
+            # c) 방향 정렬: 단일 전송
             self.run_direction_align([rid], do_release=False)
 
-            # (3) 방향 완료 대기
-            while True:
-                info = self.alignment_pending.get(rid)
-                if not info or info.get("mode") != "direction": break
-                time.sleep(0.1)
-            if not self.check_direction_alignment_ok(rid):
-                self.run_direction_align([rid], do_release=False); return
+            # d) 방향 pending 끝날 때까지 대기
+            while self.alignment_pending.get(rid, {}).get("mode") == "direction":
+                time.sleep(0.05)
 
-            time.sleep(self.alignment_delay_sec)      # 방향 끝난 뒤 0.3s
-
-            # (4) 전체 정렬 완료 신호 (다른 로봇 이동은 계속)
+            # (선택) 완료 콜백
             if hasattr(self, "_align_cb") and self._align_cb:
                 self._align_cb(rid)
 
         for rid in preset_ids:
             threading.Thread(target=_one, args=(rid,), daemon=True).start()
+
 
     def aligned_recently(self, robot_id: str | int, within_sec: float = 0.3) -> bool:
         ts = self._last_align_ok_ts.get(str(robot_id))

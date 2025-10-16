@@ -17,11 +17,11 @@ def push_keycode(code: int):
     """외부(Kivy)에서 보낸 가상 키코드를 백엔드에 전달"""
     _KEYQ.put(code)
 
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
 ICBS_PATH = os.path.join(CURRENT_DIR, '..', 'MAPF-ICBS', 'code')
 sys.path.append(os.path.normpath(ICBS_PATH))
 
@@ -29,18 +29,18 @@ sys.path.append(os.path.normpath(ICBS_PATH))
 from OpenCV.code.grid import load_grid, GRID_FOLDER
 from OpenCV.code.interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths,draw_home_positions
 from OpenCV.code.config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
-from OpenCV.code.visionsystem_mjk import VisionSystem 
+from OpenCV.code.vision.visionsystem_mjk import VisionSystem
 from OpenCV.code.vision.camera import camera_open, Undistorter 
 from OpenCV.code.cbs.pathfinder import PathFinder, Agent
 from OpenCV.code.RobotController_merge import RobotController
 from OpenCV.code.config import cell_size_cm
-from OpenCV.code.manual_mode import ManualPathSystem  
+from OpenCV.code.manual_mode import ManualPathSystem
 from OpenCV.code.recieve_message import set_tag_info_provider
 from OpenCV.code.ScenarioManager import ScenarioManager
 from OpenCV.code.TestMode import TestMode
 from OpenCV.code.RandomMode import RandomMode
+from OpenCV.code.RestaurantMode import RestaurantMode  
 from OpenCV.code.ui_bridge import FrameBus, get_cmd_nowait
-
 
 SELECTED_RIDS = set()
 
@@ -62,13 +62,21 @@ ROBOT_HOME_POSITIONS = {
 
 MODE_FACTORY = {
     "test": lambda: TestMode(),
-    "random": lambda: RandomMode(
-        home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid)
+    "restaurant": lambda: RestaurantMode(
+        home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid),
+        order_span_sec=(0, 30),
     ),
 }
 _mode_keys = list(MODE_FACTORY.keys())
 _mode_idx = [0]  # 가변 캡쳐용(리스트)
 
+# CBS 설정
+SOLVER_CHOICES = ["CBS", "ICBS_CB", "ICBS"]
+_SOLVER_IDX = 0   # 0:CBS, 1:ICBS_CB, 2:ICBS  (기본 CBS)
+DISJOINT = True
+
+def current_solver() -> str:
+    return SOLVER_CHOICES[_SOLVER_IDX]
 
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
@@ -117,15 +125,6 @@ def correction_trackbar_callback(val):
     global correction_coef_value
     correction_coef_value = val / 100.0
     print(f"[INFO] 실시간 보정계수: {correction_coef_value:.2f}")
-
-if SHOW_CV_WINDOWS:
-    cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
-    cv2.createTrackbar(
-        "Correction Coef", "CorrectionPanel",
-        int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
-    )
-correction_trackbar_callback(int(CORRECTION_COEF * 100))
-
 
 cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
 cv2.createTrackbar(
@@ -177,6 +176,40 @@ def compute_visible_robot_ids(tag_info: dict) -> list[int]:
             visible.append(tid)
     visible.sort()
     return visible
+
+
+def show_orders_text_panel(ui_state: dict):
+    # 간단한 텍스트 렌더링 패널
+    import numpy as np, cv2
+    H, W = 400, 320
+    img = np.full((H, W, 3), 255, np.uint8)
+
+    y = 20
+    # 0) HOME 대기 / READY 리스트 상단 표시
+    home_set = sorted(ui_state.get("home_set", []))
+    order_list = ui_state.get("order_list", [])
+    want_rids = sorted({rid for (rid, _) in order_list})  # 주문이 걸려있는 로봇들
+    has_order = sorted(set(home_set) & set(want_rids))
+    cv2.putText(img, f"Ready (home_set): {home_set if home_set else '[]'}", (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
+    y += 22
+    cv2.putText(img, f"Has order:        {has_order if has_order else '[]'}", (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
+    y += 28
+    cv2.putText(img, "Orders (order_list)", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
+    y += 20
+
+    lst = order_list
+    if not lst:
+        cv2.putText(img, "(empty)", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128,128,128), 1, cv2.LINE_AA)
+    else:
+        for (rid, dst) in lst[:14]:  # 너무 길면 잘라서 표시
+            y += 22
+            cv2.putText(img, f"id:{rid} -> {tuple(dst)}", (10, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
+
+    cv2.imshow("Orders", img)
+
 
 
 def _get_tag_cm(tag_info: dict, rid: int):
@@ -270,6 +303,30 @@ def mouse_event(event, x, y, flags, param):
     finally:
         # 우클릭 한 번으로 끝 — 선택은 해제
         selected_robot_id = None
+
+def handle_number_key_unified(key):
+    """
+    숫자키(1~9) 공통 핸들러:
+      1) 숫자키 이벤트를 ScenarioManager로 라우팅
+      2) 기존 UI 선택/토글 및 selected_robot_id 갱신
+    """
+    global SELECTED_RIDS, selected_robot_id
+    rid = int(chr(key))
+
+    # 1) 모드에 필요한 행동은 매니저가 수행(CBS/정렬 포함)
+    scenario.on_number_key(rid)
+
+    # 2) 기존 UI 토글 유지
+    if rid in SELECTED_RIDS:
+        SELECTED_RIDS.remove(rid)
+        print(f"[-] 선택 해제: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
+    else:
+        SELECTED_RIDS.add(rid)
+        print(f"[+] 선택 추가: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
+
+    selected_robot_id = rid
+    print(f"🎯 목표지정 대상 로봇: {selected_robot_id}")
+
 
 # ---------------------------
 # 수동 경로 시스템 연결부
@@ -394,7 +451,10 @@ def compute_cbs():
             pass
 
     # 2) PathFinder는 매번 최신 그리드로 생성
-    pathfinder_local = PathFinder(aug_grid)
+    pathfinder_local = PathFinder(aug_grid, 
+                                  solver_type=current_solver(),
+                                  disjoint=DISJOINT,
+                                  visualize_result=False)
 
     # 3) 계산 및 결과 반영
     solved_agents = pathfinder_local.compute_paths(ready_agents)
@@ -455,7 +515,7 @@ def immediate_stop(client, ids):
         print(f"🛑 [Robot_{rid}] 즉시정지(im_S) 전송")
         
 def main():
-    global agents, paths, visualize, tag_info, grid_array, selected_robot_id
+    global agents, paths, visualize, tag_info, grid_array, selected_robot_id, _SOLVER_IDX, DISJOINT
 
     # 그리드 불러오기(비전 결과로 대체되기 전까지 0으로 시작)
     grid_array = np.zeros((grid_row, grid_col), dtype=np.uint8)
@@ -463,7 +523,11 @@ def main():
     # 슬라이더 생성
     slider_create()
     detect_params = slider_value()
-
+    
+    # UI 맞게 수정
+    #=========================================
+    #=========================================
+    
     if SHOW_CV_WINDOWS:
         cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("Video_display", vision.mouse_callback)
@@ -504,12 +568,12 @@ def main():
         if any("grid_position" in data for data in visionOutput["tag_info"].values()):
             update_agents_from_tags(visionOutput["tag_info"])
 
-
         # UI 연동
         # =============================
         # =============================
         FrameBus.set_video(frame)
         FrameBus.set_grid(vis)
+        FrameBus.set_warped(vis)
 
         # UI 명령 처리 (버튼 클릭, 키 입력 등)
         # =============================
@@ -624,26 +688,47 @@ def main():
                 tgt.goal = (row, col)
                 print(f"[UI] 로봇 {rid} 목표=({row},{col}) 설정")
 
-        # =============================
-        # =============================
 
+        elif cmd == "auto_release_align_cbs":  # (UI 버튼용)
+            # 기존 o키 기능 그대로 복제
+            send_release_all(client, PRESET_IDS)
+            ready_agents = [a for a in agents if a.start and a.goal]
+            waiters = [a for a in agents if a.start and not a.goal]
+
+            waiter_ids = [a.id for a in waiters]
+            if waiter_ids:
+                controller.run_align_sequence(waiter_ids, do_release=False)
+
+            compute_cbs()
+            print("[UI] 전체 Release + Align + CBS 실행 완료")
+
+        elif cmd == "solver_next":
+            _SOLVER_IDX = (_SOLVER_IDX + 1) % len(SOLVER_CHOICES)
+            print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+
+        elif cmd == "solver_prev":
+            _SOLVER_IDX = (_SOLVER_IDX - 1) % len(SOLVER_CHOICES)
+            print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+
+        elif cmd == "toggle_disjoint":
+            DISJOINT = not DISJOINT
+            print(f"[UI][MAPF] disjoint = {DISJOINT}")
+
+        # =============================
+        # =============================
 
         # UI 시각화 화면
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
         manual.draw_overlay(vis)  # ← 수동 경로 오버레이
+        ui_state = scenario.get_mode_ui_state(drain_new=True)
+        
+        if ui_state:
+            show_orders_text_panel(ui_state)
+        cv2.imshow("CBS Grid", vis)
+        cv2.imshow("Video_display", frame)
 
-        if SHOW_CV_WINDOWS:
-            cv2.imshow("CBS Grid", vis)
-            cv2.imshow("Video_display", frame)
-            key = cv2.waitKey(1)
-
-        else: 
-            try:
-                key = _KEYQ.get_nowait()
-            except Empty:
-                key = -1
-                
+        key = cv2.waitKey(1)
         if key == ord('q'):
             break
         elif key == ord('r'):
@@ -652,6 +737,7 @@ def main():
             paths.clear()
             manual.reset_paths()  # ← 수동 경로만 초기화 추가
         elif key == ord('c'):
+            scenario.set_enabled(False)
             if manual.is_manual_mode():
                 # 수동 경로 전송(선택된 로봇의 수동 경로를 command로 변환한 뒤 전송)
                 manual.commit()
@@ -682,15 +768,8 @@ def main():
             controller.run_center_align(PRESET_IDS, do_release=False)
         # 숫자키로 대상 선택/토글 (예: 1~9)
         elif key in tuple(ord(str(i)) for i in range(1, 10)):
-            rid = int(chr(key))
-            if rid in SELECTED_RIDS:
-                SELECTED_RIDS.remove(rid)
-                print(f"[-] 선택 해제: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
-            else:
-                SELECTED_RIDS.add(rid)
-                print(f"[+] 선택 추가: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
-            selected_robot_id = rid
-            print(f"🎯 목표지정 대상 로봇: {selected_robot_id}")
+            handle_number_key_unified(key)
+
         # 선택 로봇 정지 (그냥 누르면 전체 정지)
         elif key == ord('t'):
             targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
@@ -715,6 +794,25 @@ def main():
                     print(f"🛑 모든 접속 로봇 즉시 정지(im_S): {PRESET_IDS}")
                 else:
                     print("⚠️ 즉시 정지할 접속 로봇이 없습니다.")
+
+        elif key == ord('o'):
+            # 1) 전체 RE
+            send_release_all(client, PRESET_IDS)
+
+            # 2) 대기(waiter)와 준비(ready) 분리
+            ready_agents = [a for a in agents if a.start and a.goal]
+            waiters      = [a for a in agents if a.start and not a.goal]
+
+            waiter_ids = [a.id for a in waiters]
+            if waiter_ids:
+                # 3) 대기는 중앙정렬 → 방향정렬 병렬 실행
+                #    RE는 이미 보냈으므로 do_release=False
+                controller.run_align_sequence(waiter_ids, do_release=False)
+
+            # 4) ready만 대상으로 CBS 경로 계산&송신
+            #    compute_cbs()는 대기자를 장애물로 올려서 경로를 짬
+            compute_cbs()
+
         # 수동 모드
         elif key == ord('z'):
             manual.toggle_mode() 
@@ -728,6 +826,16 @@ def main():
 
         elif key == 32:  # Spacebar
             scenario.toggle_enabled()
+
+        elif key == ord(']'):   # 옵션 다음으로
+            _SOLVER_IDX = (_SOLVER_IDX + 1) % len(SOLVER_CHOICES)
+            print(f"[MAPF] solver_type = {current_solver()}  (disjoint={DISJOINT})")
+        elif key == ord('['):   # 옵션 이전으로
+            _SOLVER_IDX = (_SOLVER_IDX - 1) % len(SOLVER_CHOICES)
+            print(f"[MAPF] solver_type = {current_solver()}  (disjoint={DISJOINT})")
+        elif key == ord('p'):  
+            DISJOINT = not DISJOINT
+            print(f"[MAPF] disjoint = {DISJOINT}")
         
         # elif key == ord('d'):
         #     if manual.is_manual_mode():

@@ -4,16 +4,25 @@ import numpy as np
 import random
 
 class PathFinder:
-    def __init__(self, grid_array: np.ndarray):
+    def __init__(self, grid_array: np.ndarray,
+                 solver_type: str = "CBS",
+                 disjoint: bool = True,
+                 visualize_result: bool = False):
         self.grid = grid_array
         self.map_array = self.grid.astype(bool)
         self.rows, self.cols = self.grid.shape
-        self.valid_cells = [
-            (r, c) for r in range(self.rows) for c in range(self.cols) if self.grid[r, c] == 0
-        ]
-        self.manager = CBSManager(solver_type="CBS", disjoint=True, visualize_result=False)
+        self.valid_cells = [(r, c) for r in range(self.rows) for c in range(self.cols) if self.grid[r, c] == 0]
+        self.manager = CBSManager(
+            solver_type=solver_type,
+            disjoint=disjoint,
+            visualize_result=visualize_result
+        )
 
-
+    def set_solver(self, solver_type: str | None = None, disjoint: bool | None = None):
+        if solver_type is not None:
+            self.manager.solver_type = solver_type
+        if disjoint is not None:
+            self.manager.disjoint = disjoint
     def compute_paths(self, agents: list["Agent"]) -> list["Agent"]:
 
         """
@@ -41,12 +50,7 @@ class Agent:
         self._final_path = None
 
     def get_final_path(self):
-        if self._final_path is None:
-            if self.delay > 0:
-                self._final_path = [self.start] * self.delay + self.path
-            else:
-                self._final_path = self.path
-        return self._final_path
+        return self.path
 
     def __repr__(self):
         return f"Agent(id={self.id}, start={self.start}, goal={self.goal}, delay={self.delay}, path_len={len(self.path)})"

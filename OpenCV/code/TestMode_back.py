@@ -4,7 +4,7 @@ import random
 from typing import Dict, List, Tuple, Set, TypedDict, Optional
 import time
 import numpy as np
-from cbs.pathfinder import Agent  # 프로젝트의 Agent 사용
+from OpenCV.code.cbs.pathfinder import Agent  # 프로젝트의 Agent 사용
 
 Cell = Tuple[int, int]
 RobotId = int

@@ -415,6 +415,10 @@ def main():
                         else:
                             agent = Agent(id=selected_robot_id, start=None, goal=None, delay=delay_val)
                             agents.append(agent)
+
+                        if sim is not None:
+                            info = sim.robot_info.setdefault(selected_robot_id, {})
+                            info['delay'] = delay_val
                     delay_input_mode = False
                     delay_input_buffer = ""
 

@@ -62,6 +62,7 @@ class ScenarioManager:
         self.controller.set_robot_completion_callback(self.on_robot_complete)
 
         self.mode: IMode = mode
+        self._delayed_align_jobs = []
         self.enabled: bool = False
         self.ctx: Dict[int, dict] = {}  # per-agent 상태(모드 전용)
 
@@ -110,39 +111,91 @@ class ScenarioManager:
         self.enabled = bool(on)
         print(f"[Scenario] {'ENABLED' if self.enabled else 'PAUSED'}")
 
+        # ★ enable될 때 현재 모드 enter() 호출
+        if self.enabled:
+            self._sync_starts_from_tags()
+            rs = self._build_runstate()
+            res = self.mode.enter(
+                tag_info=self.get_tag_info(),
+                grid=self.get_grid(),
+                agents=self.agents_ref,
+                ctx=self.ctx,
+                runstate=rs,
+            )
+            # 모드가 반환한 신호 적용 (정렬·replan)
+            if res:
+                ac = set(res.get("align_center") or [])
+                ad = set(res.get("align_direction") or [])
+                targets = sorted(list(ac | ad))
+                if targets:
+                    # ★ 정렬 게이트: 정렬 대상 기록
+                    self.ctx.setdefault("_align_gate", set()).update(targets)
+                    self.controller.run_align_sequence(targets, do_release=False)
+
+                # ★ replan은 정렬 게이트가 없을 때만 수행
+                if res.get("replan") and not self.ctx.get("_align_gate"):
+                    if getattr(self.controller, "active", False):
+                        self.controller.request_pause_on_step_boundary()
+                        self._replan_requested = True
+                    else:
+                        self._sync_starts_from_tags()
+                        self._plan_and_send(self.get_grid(), res)
+
     def toggle_enabled(self):
         self.set_enabled(not self.enabled)
 
     def on_align_complete(self, rid: str):
-        if not self.enabled: return
-        self._sync_starts_from_tags()
-        rs = self._build_runstate()
-        # 모드에게 "정렬 끝" 이벤트 전달 → 모드가 필요시 replan
+        aligning = self.ctx.get("_aligning", set())
+        if isinstance(aligning, set):
+            aligning.discard(int(rid))
+
+        # ✅ 모드 콜백을 실제 인자로 호출
+        res = None
         if hasattr(self.mode, "on_alignment_complete"):
-            res = self.mode.on_alignment_complete(int(rid),
-                        tag_info=self.get_tag_info(), grid=self.get_grid(),
-                        agents=self.agents_ref, ctx=self.ctx, runstate=rs)
-            if res and res.get("replan"):
-                self._plan_and_send(self.get_grid(), res)
+            res = self.mode.on_alignment_complete(
+                int(rid),
+                tag_info=self.get_tag_info(),
+                grid=self.get_grid(),
+                agents=self.agents_ref,
+                ctx=self.ctx,
+                runstate=self._build_runstate(),
+            )
+
+        if res and res.get("replan"):
+            # 컨트롤러가 실행 중이면 경계로, 유휴면 즉시
+            if getattr(self.controller, "active", False):
+                self.controller.request_pause_on_step_boundary()
+                self._replan_requested = True
+            else:
+                self._plan_and_send(self.get_grid(), res or {})
+                self._replan_requested = False
 
     # ---- 메인 루프에서 호출 ----
     def tick(self):
         if not self.enabled:
             return
         self._sync_starts_from_tags()
+
+        now = time.time()
+        if self._delayed_align_jobs:
+            due, later = [], []
+            for (t, targets, reason) in self._delayed_align_jobs:
+                (due if now >= t else later).append((t, targets, reason))
+            self._delayed_align_jobs = later
+            for _, targets, reason in due:
+                targets = sorted(list(set(targets)))
+                if not targets:
+                    continue
+                # 실행 시점에 게이트 올림 + 정렬 실행
+                self.ctx.setdefault("_aligning", set()).update(targets)
+                self.controller.run_align_sequence(targets, do_release=False)
+
         grid = self.get_grid()
         tag = self.get_tag_info()
         runstate = self._build_runstate()
         res = self.mode.tick(tag_info=tag, grid=grid, agents=self.agents_ref,
                              ctx=self.ctx, runstate=runstate)
         if res:
-            ac = res.get("align_center") or set()
-            ad = res.get("align_direction") or set()
-            targets = sorted(list(ac | ad))
-            if targets:
-                self.controller.run_align_sequence(targets, do_release=False)
-
-            # 2) replan 처리
             if res.get("replan"):
                 if getattr(self.controller, "active", False):
                     # 진행 중이면: 스텝 경계에서 1회만 재계획
@@ -169,11 +222,11 @@ class ScenarioManager:
         ) or {}
 
         # 정렬 요청은 그대로 반영
-        ac = res.get("align_center") or set()
-        ad = res.get("align_direction") or set()
-        targets = sorted(list(ac | ad))
-        if targets:
-            self.controller.run_align_sequence(targets, do_release=False)
+        # ac = res.get("align_center") or set()
+        # ad = res.get("align_direction") or set()
+        # targets = sorted(list(ac | ad))
+        # if targets:
+        #     self.controller.run_align_sequence(targets, do_release=False)
 
         # 최종 replan 여부: (플래그 OR 모드 응답)
         should_replan = self._replan_requested or res.get("replan", False)
@@ -227,6 +280,7 @@ class ScenarioManager:
     def _plan_and_send(self, grid, res):
         # A) 모드 결과 정규화
         waiters_ids  = set(res.get("waiters", set()))
+        waiters_ids |= set(self.ctx.get("_aligning", set()))
         ready_ids    = res.get("ready")  # 없으면 전체 start!=goal 대상
         waiter_cells = set(res.get("waiter_cells", set()))
 
@@ -348,10 +402,10 @@ class ScenarioManager:
             }
         return rs
 
+    
     def on_robot_complete(self, rid: str):
         if not self.enabled:
             return
-        # 모드에게 물어봄: 이 로봇 완료 시점에 재계획/새 목적지 필요?
         self._sync_starts_from_tags()
         rs = self._build_runstate()
         if hasattr(self.mode, "on_robot_complete"):
@@ -363,9 +417,24 @@ class ScenarioManager:
         else:
             res = {"replan": False, "reason": "nohook"}
 
-        # 재계획 필요 없다 → 컨트롤러는 평소대로 다음 스텝 진행
+        # ★ 추가: 모드가 '지금' 정렬해달라면, 그 로봇만 즉시 정렬 실행
+        if res:
+            ac = set(res.get("align_center") or [])
+            ad = set(res.get("align_direction") or [])
+            targets = sorted(list(ac | ad))
+            if targets:
+                # 게이트(정렬 끝나기 전 CBS 금지)도 이때 세팅해 두면 안전
+                delay = float(res.get("align_delay_sec") or 0.0)
+                if delay > 0:
+                    exec_at = time.time() + delay
+                    self._delayed_align_jobs.append((exec_at, set(targets), res.get("reason", "")))
+                else:
+                    # 즉시 실행 경로(기존)
+                    self.ctx.setdefault("_align_gate", set()).update(targets)
+                    self.controller.run_align_sequence(targets, do_release=False)
+
+        # (기존) replan 요청은 시퀀스 경계로 지연
         if res and res.get("replan"):
-            # 경계에서 정지만 예약, 실제 CBS는 on_sequence_complete에서 1회만 실행
             self.controller.request_pause_on_step_boundary()
             self._replan_requested = True
         return
@@ -397,6 +466,52 @@ class ScenarioManager:
 
         return None
 
+    def on_number_key(self, rid: int):
+        if not self.enabled:
+            return
+        self._sync_starts_from_tags()
+        rs = self._build_runstate()
+
+        res = None
+        # 모드가 on_number_key를 제공하면 전달
+        if hasattr(self.mode, "on_number_key"):
+            res = self.mode.on_number_key(rid, agents=self.agents_ref, ctx=self.ctx)
+        # (레스토랑 모드 호환) on_home_key만 있으면 포워딩
+        elif hasattr(self.mode, "on_home_key"):
+            res = self.mode.on_home_key(rid, agents=self.agents_ref, ctx=self.ctx)
+
+        if not res:
+            return
+
+        # 1) 정렬은 '모드가 요청했을 때만' 실행
+        ac = set(res.get("align_center") or [])
+        ad = set(res.get("align_direction") or [])
+        t = sorted(list(ac | ad))
+        if t:
+            self.controller.run_align_sequence(t, do_release=False)
+
+        # 2) CBS 트리거: 유휴면 즉시, 실행 중이면 스텝 경계로 지연
+        if res.get("replan"):
+            if getattr(self.controller, "active", False):
+                self.controller.request_pause_on_step_boundary()
+                self._replan_requested = True
+            else:
+                self._sync_starts_from_tags()
+                self._plan_and_send(self.get_grid(), res)
+    
+    def get_mode_ui_state(self, *, drain_new: bool = True):
+        """
+        UI에서 호출하는 읽기 전용 스냅샷 API.
+        현재 모드가 레스토랑이면 모드의 export_ui_state를 프락시한다.
+        drain_new=True면 order_new를 1회 표시 후 소거한다.
+        """
+        try:
+            from RestaurantMode import RestaurantMode
+            if isinstance(self.mode, RestaurantMode):
+                return self.mode.export_ui_state(clear_new=drain_new)
+        except Exception as e:
+            print(f"[Scenario] get_mode_ui_state error: {e}")
+        return {}
 
 class BaseMode:
     name = "Base"
@@ -465,3 +580,4 @@ class BaseMode:
         s.setdefault("verifying", False)
         s.setdefault("verify_goal", None)
         return s
+    
