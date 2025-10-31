@@ -683,6 +683,7 @@ class BoardDetector:
        
         if self.debug_draw:
             self._draw_overlay_once(dbg_canvas, overlay)
+            cv2.imshow("Board Debug", dbg_canvas)
 
         return ordered.reshape(4,1,2).astype(np.float32)
 

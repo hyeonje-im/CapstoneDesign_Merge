@@ -4,9 +4,7 @@ from kivy.graphics import Color, Rectangle, Line, RoundedRectangle
 from kivy.uix.image import Image
 from kivy.graphics.texture import Texture
 from kivy.clock import Clock
-from kivy.uix.widget import Widget
 from kivy.uix.anchorlayout import AnchorLayout
-from kivy.uix.label import Label
 from Utilities.UI_utilities import KLine, make_darkcell, make_brightcell, KButton, KLabel
 from OpenCV.code.ui_bridge import FrameBus, post
 from OpenCV.code.config import grid_row, grid_col
@@ -20,7 +18,7 @@ class GroupBox(BoxLayout):
 
         # 배경 + 라운드 테두리
         with self.canvas.before:
-            Color(0x25 / 255, 0x28 / 255, 0x3B / 255, 1)  # 다크셀과 동일 배경
+            Color(0x25 / 255, 0x28 / 255, 0x3B / 255, 1)
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[5])
         with self.canvas.after:
             Color(0, 0, 0, 1)
@@ -99,10 +97,10 @@ class CenterWidget(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation='vertical', size_hint_x=0.25, **kwargs)
         self.selected_robot_id = None
-        self.current_scenario_mode = "test"   # main.py 모드명과 일치
+        self.current_scenario_mode = "test"   # 초기 모드
         self.current_solver = "CBS"           # solver 기본값
 
-        # 배경 / 테두리
+        # ===== 배경/테두리 =====
         with self.canvas.before:
             Color(0, 0, 0, 1)
             self.border = KLine(self)
@@ -112,8 +110,8 @@ class CenterWidget(BoxLayout):
 
         # ===== 상단 (GridView) =====
         upper_section = BoxLayout(orientation='vertical', size_hint_y=0.4, spacing=5)
-        grid_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(0.8, 1))
-        self.grid_view = GridTextureView(size_hint=(0.9, 0.9))
+        grid_container = AnchorLayout(anchor_x='center', anchor_y='center', size_hint=(1, 1))
+        self.grid_view = GridTextureView(size_hint=(0.9, 0.9), pos_hint={'center_x': 0.5, 'center_y': 0.5})
         self.grid_view.center_widget = self
         grid_container.add_widget(self.grid_view)
         upper_section.add_widget(grid_container)
@@ -135,7 +133,7 @@ class CenterWidget(BoxLayout):
             ("보드 고정", "lock_board"),
             ("보드 해제", "unlock_board"),
             ("보드 재선택(ROI)", "start_roi_selection"),
-            ("시각화 토글", "toggle_visualization")
+            ("시각화 토글on/off", "toggle_visualization")
         ]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
@@ -145,8 +143,8 @@ class CenterWidget(BoxLayout):
         # 정렬
         align_group = GroupBox(title="정렬", size_hint_y=1/6)
         for text, cmd in [
-            ("정렬(센터)", "center_align"),
-            ("정렬(방향)", "direction_align")
+            ("중앙 정렬", "center_align"),
+            ("방향 정렬", "direction_align")
         ]:
             btn = KButton(text=text)
             btn.bind(on_press=lambda inst, c=cmd: post(c))
@@ -176,18 +174,18 @@ class CenterWidget(BoxLayout):
 
         # 시나리오 제어
         scenario_group = GroupBox(title="시나리오 제어", size_hint_y=1/6)
-        self.btn_scenario_mode = KButton(text=f"시나리오 모드: {self.current_scenario_mode}")
+        self.btn_scenario_mode = KButton(text=f"Mode: {self.current_scenario_mode.capitalize()}")
         self.btn_scenario_mode.bind(on_press=self.toggle_scenario_mode)
         scenario_group.content.add_widget(self.btn_scenario_mode)
 
-        btn_scenario_run = KButton(text="시나리오 실행/정지 (Space)")
+        btn_scenario_run = KButton(text="시나리오 실행/정지")
         btn_scenario_run.bind(on_press=lambda inst: post("toggle_scenario_run"))
         scenario_group.content.add_widget(btn_scenario_run)
         lower_section.add_widget(scenario_group)
 
         # MAPF 제어
         mapf_group = GroupBox(title="MAPF 제어", size_hint_y=1/6)
-        btn_auto = KButton(text="전체 Release + Align + CBS")
+        btn_auto = KButton(text="로봇 초기화 및 경로탐색")
         btn_auto.bind(on_press=lambda inst: post("auto_release_align_cbs"))
         mapf_group.content.add_widget(btn_auto)
 
@@ -218,6 +216,9 @@ class CenterWidget(BoxLayout):
         self.add_widget(upper_section)
         self.add_widget(lower_section)
 
+        # --- 주기적으로 백엔드 모드 동기화 ---
+        Clock.schedule_interval(self.sync_scenario_mode, 0.5)
+
     # ------------------------ 유틸 메서드 ------------------------
     def select_robot(self, rid):
         self.selected_robot_id = rid
@@ -230,13 +231,16 @@ class CenterWidget(BoxLayout):
 
     # --- 시나리오 모드 토글 ---
     def toggle_scenario_mode(self, instance):
-        modes = ["test", "restaurant", "random"]
-        cur_idx = modes.index(self.current_scenario_mode)
-        next_idx = (cur_idx + 1) % len(modes)
-        self.current_scenario_mode = modes[next_idx]
         post("toggle_scenario_mode")
-        self.btn_scenario_mode.text = f"시나리오 모드: {self.current_scenario_mode}"
-        print(f"[UI] Scenario Mode → {self.current_scenario_mode}")
+        print("[UI] 시나리오 모드 변경 요청 전송")
+
+    # --- 백엔드 모드 동기화 (FrameBus 통해 반영) ---
+    def sync_scenario_mode(self, dt):
+        new_mode = FrameBus.get_mode()
+        if new_mode and new_mode != self.current_scenario_mode:
+            self.current_scenario_mode = new_mode
+            self.btn_scenario_mode.text = f"Mode: {new_mode.capitalize()}"
+            print(f"[UI] 모드 동기화됨 → {new_mode.capitalize()}")
 
     # --- Solver 변경 (< >) ---
     def change_solver(self, direction):

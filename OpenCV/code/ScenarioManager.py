@@ -506,7 +506,7 @@ class ScenarioManager:
         drain_new=True면 order_new를 1회 표시 후 소거한다.
         """
         try:
-            from RestaurantMode import RestaurantMode
+            from OpenCV.code.RestaurantMode import RestaurantMode
             if isinstance(self.mode, RestaurantMode):
                 return self.mode.export_ui_state(clear_new=drain_new)
         except Exception as e:

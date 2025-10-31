@@ -11,7 +11,8 @@ class FrameBus:
     _video = None   # BGR ndarray
     _grid  = None   # BGR ndarray
     _warped = None  # BGR ndarray
-    
+    _orders = None  # UI 상태 딕셔너리
+    _mode = None   # UI 모드 문자열
     @classmethod
     def set_video(cls, frame_bgr):
         with cls._lock:
@@ -41,8 +42,33 @@ class FrameBus:
     def get_warped(cls):
         with cls._lock:
             return cls._warped
+        
+    @classmethod
+    def set_orders(cls, img_bgr):
+        with cls._lock:
+            cls._orders = img_bgr
 
+    @classmethod
+    def get_orders(cls):
+        with cls._lock:
+            return cls._orders
+        
+    # ============================
+    # 🔹 시나리오 모드 공유 (추가 부분)
+    # ============================
+    @classmethod
+    def set_mode(cls, mode: str):
+        """현재 시나리오 모드(Test/Restaurant/Random)를 UI와 공유"""
+        with cls._lock:
+            cls._mode = mode.lower() if mode else None
+        print(f"[FrameBus] 시나리오 모드 저장됨 → {cls._mode}")
 
+    @classmethod
+    def get_mode(cls) -> Optional[str]:
+        """UI에서 현재 모드를 읽어올 때 사용"""
+        with cls._lock:
+            return cls._mode
+        
 _CMDQ: "Queue[Tuple[str, Dict[str, Any]]]" = Queue()
 _DEBUG_LOG = True 
 

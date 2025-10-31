@@ -1,4 +1,3 @@
-
 import cv2
 import numpy as np
 import math
@@ -45,6 +44,7 @@ class VisionSystem:
         self.show_pairwise_distances = False       # 화면에 거리 표시 ON/OFF
         self.proximity_threshold_cm = critical_dist        # 임계 거리(색상 기준)
         self.exclude_ids_for_distance = {NORTH_TAG_ID}
+        self.frame_margin_ratio = 0.04
     # =====수동 ROI 선택===== 
     
     def start_roi_selection(self):
@@ -80,6 +80,7 @@ class VisionSystem:
         frame, new_camera_matrix = self.undistorter.undistort(raw_frame)
         self.frame_shape = frame.shape[:2]
         self.frame_count += 1
+        raw_bgr = frame.copy()
         raw_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         rect_override = None
@@ -139,18 +140,62 @@ class VisionSystem:
         
         # 보드가 lock 상태이고 결과가 있을 때
         if self.board.is_locked and self.board_result is not None:
+            # 1) 장애물 갱신(기존 유지)
             occ = self.obstacle_detector.update_from_board(self.board_result)
             if occ is not None:
-                # True=장애물 → 1, False=빈칸 → 0
                 self._last_obstacle_grid = (occ.astype('uint8'))
                 self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
-            # 화면 크기로 리사이즈된 warp 이미지
-            cv2.imshow("Warped Board Preview", self.board_result.warped_resized)
+
+            # 2) src/dst 준비
+            #   - src: 보드 4코너(원본 픽셀 좌표)
+            #   - dst: (0,0)~(W-1,H-1) 사각형(여백 포함)
+            br = self.board_result
+            src = br.corners.astype(np.float32)
+            w_px = int(br.width_px)
+            h_px = int(br.height_px)
+
+            m = getattr(self, "frame_margin_ratio", 0.05)
+            new_w = int(round(w_px * (1 + 2*m)))
+            new_h = int(round(h_px * (1 + 2*m)))
+            pad_w = int(round(new_w * m))
+            pad_h = int(round(new_h * m))
+
+            dst = np.array([
+                [pad_w,         pad_h        ],
+                [new_w-pad_w-1, pad_h        ],
+                [new_w-pad_w-1, new_h-pad_h-1],
+                [pad_w,         new_h-pad_h-1]
+            ], dtype=np.float32)
+
+            # 3) Homography & 컬러 warp
+            H_full = cv2.getPerspectiveTransform(src, dst)
+            warped_color = cv2.warpPerspective(raw_bgr, H_full, (new_w, new_h))
+
+            # 4) 그리드/셀 중심 오버레이 (있을 때만)
+            ref = getattr(br, "grid_reference", None)
+            if ref:
+                # ── grid_lines ──
+                glines = ref.get("grid_lines", {})
+                for segs in glines.values():
+                    for (p1_cm, p2_cm) in segs:
+                        p1 = self.cm_to_warp_px(p1_cm[0], p1_cm[1])
+                        p2 = self.cm_to_warp_px(p2_cm[0], p2_cm[1])
+                        if p1 and p2:
+                            cv2.line(warped_color, p1, p2, (0, 0, 0), 1)
+
+                # ── cell_centers ──
+                for (cx, cy) in ref.get("cell_centers", []):
+                    q = self.cm_to_warp_px(cx, cy)
+                    if q is not None:
+                        cv2.circle(warped_color, q, 2, (0, 0, 0), -1)
+
+            # 5) 프리뷰 사이즈로 리사이즈 + 표시
+            preview = cv2.resize(warped_color, (min(new_w, 900), min(new_h, 900)))
+            cv2.imshow("Warped Board Preview", preview)
             #============================
             #============================
             # 워프영상을 FrameBus에 전달
-            warped_frame = self.board_result.warped_resized
-            FrameBus.set_warped(warped_frame)
+            FrameBus.set_warped(warped_color)
             #============================
             #============================
 
@@ -561,6 +606,42 @@ class VisionSystem:
         self._last_roi_bbox = (x_min, y_min, x_max, y_max)
         return roi, (x_min, y_min, x_max, y_max)
     
+    def cm_to_warp_px(self, x_cm: float, y_cm: float) -> tuple[int, int] | None:
+        """
+        보드의 cm 좌표를 warp된 보드 이미지 좌표(px)로 변환
+        """
+        if not (self.board_result and self.board.is_locked):
+            return None
+
+        w_px = int(self.board_result.width_px)
+        h_px = int(self.board_result.height_px)
+
+        m = getattr(self, "frame_margin_ratio", 0.05)
+        new_w = int(round(w_px * (1 + 2*m)))
+        new_h = int(round(h_px * (1 + 2*m)))
+        pad_w = int(round(new_w * m))
+        pad_h = int(round(new_h * m))
+
+        # cm 좌표 → 픽셀 좌표 (warp 캔버스 기준)
+        x_px = int(round(pad_w + x_cm * (w_px / board_width_cm)))
+        y_px = int(round(pad_h + y_cm * (h_px / board_height_cm)))
+        return (x_px, y_px)
+
+    def cell_to_warp_px(self, row: int, col: int) -> tuple[int, int] | None:
+        """
+        보드의 grid 셀(row, col)을 warp된 보드 이미지 좌표(px)로 변환
+        """
+        if not (self.board_result and self.board.is_locked and self.board_result.grid_reference):
+            return None
+
+        centers = self.board_result.grid_reference["cell_centers"]
+        idx = row * self.grid_col + col
+        if idx < 0 or idx >= len(centers):
+            return None
+
+        cx_cm, cy_cm = centers[idx]
+        return self.cm_to_warp_px(cx_cm, cy_cm)
+
 
 class ROIFilter:
     def __init__(

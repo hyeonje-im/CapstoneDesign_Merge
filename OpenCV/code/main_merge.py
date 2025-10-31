@@ -55,7 +55,7 @@ print(f"▶ command_transfer_encoderSelf.py 별도 콘솔에서 실행: {CTS_SCR
 # 로봇 home지정
 ROBOT_HOME_POSITIONS = {
     # 형식: 로봇ID: (행, 열)
-    4: (0, 0),
+    1: (0, 0),
     2: (2, 0),
     3: (0, 5), 
 }
@@ -80,7 +80,7 @@ def current_solver() -> str:
 
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
-USE_MQTT = 0  # 0: 비사용, 1: 사용
+USE_MQTT = 0 # 0: 비사용, 1: 사용
 
 if USE_MQTT:
     from OpenCV.code.recieve_message import init_mqtt_client
@@ -179,36 +179,65 @@ def compute_visible_robot_ids(tag_info: dict) -> list[int]:
 
 
 def show_orders_text_panel(ui_state: dict):
-    # 간단한 텍스트 렌더링 패널
     import numpy as np, cv2
-    H, W = 400, 320
+    H, W = 400, 360
+    PAD_X = 10
+    LINE_SP = 26
+
     img = np.full((H, W, 3), 255, np.uint8)
 
-    y = 20
-    # 0) HOME 대기 / READY 리스트 상단 표시
+    # --- 상단: HOME만 표시 (대괄호 제거, 숫자만) ---
     home_set = sorted(ui_state.get("home_set", []))
-    order_list = ui_state.get("order_list", [])
-    want_rids = sorted({rid for (rid, _) in order_list})  # 주문이 걸려있는 로봇들
-    has_order = sorted(set(home_set) & set(want_rids))
-    cv2.putText(img, f"Ready (home_set): {home_set if home_set else '[]'}", (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
-    y += 22
-    cv2.putText(img, f"Has order:        {has_order if has_order else '[]'}", (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
-    y += 28
-    cv2.putText(img, "Orders (order_list)", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
-    y += 20
+    home_str = " ".join(str(x) for x in home_set) if home_set else ""
+    y = 22
+    cv2.putText(img, f"Home: {home_str}", (PAD_X, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2, cv2.LINE_AA)
 
-    lst = order_list
-    if not lst:
-        cv2.putText(img, "(empty)", (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128,128,128), 1, cv2.LINE_AA)
+    # --- 중앙 제목: Orders (가운데 정렬 + 큰 글씨) ---
+    title = "Orders"
+    (tw, th), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 3)
+    y = 22 + LINE_SP + 8
+    tx = (W - tw) // 2
+    cv2.putText(img, title, (tx, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,0), 3, cv2.LINE_AA)
+
+    # --- 제목 아래 가로줄 ---
+    y_line = y + 10
+    cv2.line(img, (PAD_X, y_line), (W - PAD_X, y_line), (0,0,0), 2)
+
+    # --- 주문 목록: '진행 중'은 굵게, 대기중은 일반 ---
+    y = y_line + 20
+    # 진행 중(테이블 가는 중/홈 복귀 중)
+    active_to_table = set((int(r), tuple(dst)) for (r, dst) in ui_state.get("order_to_table", []))
+    active_to_home  = set((int(r), tuple(dst)) for (r, dst) in ui_state.get("order_to_home", []))
+    active = active_to_table | active_to_home
+
+    # 대기 중 큐
+    pending = [(int(r), tuple(dst)) for (r, dst) in ui_state.get("order_list", [])]
+
+    # 화면에 보여줄 최종 목록: 진행중 먼저, 그 다음 대기
+    render_list = list(active) + pending
+
+    if not render_list:
+        cv2.putText(img, "(no orders)", (PAD_X, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128,128,128), 2, cv2.LINE_AA)
     else:
-        for (rid, dst) in lst[:14]:  # 너무 길면 잘라서 표시
-            y += 22
-            cv2.putText(img, f"id:{rid} -> {tuple(dst)}", (10, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1, cv2.LINE_AA)
+        shown = 0
+        for (rid, dst) in render_list:
+            txt = f"{rid} > {tuple(dst)}"
+            # 진행중은 두껍게(굵게)
+            is_active = (rid, dst) in active
+            thickness = 3 if is_active else 2
+            scale = 0.9 if is_active else 0.8
+            cv2.putText(img, txt, (PAD_X, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, (0,0,0), thickness, cv2.LINE_AA)
+            y += LINE_SP
+            shown += 1
+            if shown >= 14:  # 너무 많으면 컷
+                break
 
     cv2.imshow("Orders", img)
+    FrameBus.set_orders(img)
 
 
 
@@ -402,6 +431,8 @@ scenario = ScenarioManager(
     mode=TestMode()  # 필요시 다른 모드로 교체
 )
 
+FrameBus.set_mode(_mode_keys[_mode_idx[0]])   # 초기 모드값 UI로 전달
+
 # 마우스 콜백(수동 모드일 때는 수동 핸들러로 보냄)
 def unified_mouse(event, x, y, flags, param):
     if manual.is_manual_mode():
@@ -573,17 +604,16 @@ def main():
         # =============================
         FrameBus.set_video(frame)
         FrameBus.set_grid(vis)
-        FrameBus.set_warped(vis)
+        
 
         # UI 명령 처리 (버튼 클릭, 키 입력 등)
         # =============================
         # =============================
         cmd, kwargs = get_cmd_nowait()
-        if cmd == "select_robot":                 # (로봇 선택 버튼, 숫자키 1~4와 유사 동작)
+        if cmd == "select_robot":                 # (UI 숫자 버튼 → 숫자키 동일 처리)
             rid = int(kwargs["rid"])
-            SELECTED_RIDS.clear()
-            SELECTED_RIDS.add(rid)
-            print(f"[UI] 선택 로봇 동기화 → {sorted(SELECTED_RIDS)}")
+            fake_key = ord(str(rid))                # 숫자키 코드로 변환 (예: 1 → 49)
+            handle_number_key_unified(fake_key)     # 🔹 숫자키와 동일한 로직 수행
 
         elif cmd == "compute_cbs":                # 키: 'c'
             compute_cbs()
@@ -661,6 +691,7 @@ def main():
             _mode_idx[0] = (_mode_idx[0] + 1) % len(_mode_keys)
             name = _mode_keys[_mode_idx[0]]
             scenario.set_mode(MODE_FACTORY[name]())
+            FrameBus.set_mode(name) # UI에 현재 모드명 전달
             print(f"[UI][Scenario] mode ← {name} (실행상태는 유지)")
 
         elif cmd == "toggle_scenario_run":           # 키: Spacebar
@@ -725,6 +756,7 @@ def main():
         
         if ui_state:
             show_orders_text_panel(ui_state)
+             
         cv2.imshow("CBS Grid", vis)
         cv2.imshow("Video_display", frame)
 
@@ -822,6 +854,7 @@ def main():
             _mode_idx[0] = (_mode_idx[0] + 1) % len(_mode_keys)
             name = _mode_keys[_mode_idx[0]]
             scenario.set_mode(MODE_FACTORY[name]())
+            FrameBus.set_mode(name) # UI에 현재 모드명 전달
             print(f"[Scenario] mode ← {name} (실행상태는 유지)")
 
         elif key == 32:  # Spacebar

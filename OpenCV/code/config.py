@@ -1,9 +1,24 @@
 import numpy as np
 import os
+import socket
+
+# ==========================================================
+# 🛰️ IP 자동 감지 함수
+# ==========================================================
+def get_local_ip():
+    """현재 장치의 로컬 네트워크 IP 자동 감지"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # 외부(구글 DNS)로 연결 시도 → 실제 연결은 안 됨, 단순 인터페이스 탐지용
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    finally:
+        s.close()
+    return ip
 
 # 브로커 정보
 #연구실 : 192.168.0.25
-IP_address_ = "192.168.0.48"
+IP_address_ = get_local_ip()
 MQTT_PORT      = 1883
 MQTT_TOPIC_COMMANDS_ = "command/transfer"
 

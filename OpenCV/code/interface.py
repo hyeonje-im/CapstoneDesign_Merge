@@ -3,6 +3,16 @@ import numpy as np
 
 from OpenCV.code.config import board_height_cm, board_width_cm, grid_width, grid_height, cell_size, COLORS
 
+_ID_COLOR_MAP = {}
+def _color_for_id(agent_id: int):
+    """처음 본 id부터 COLORS를 하나씩 순서대로 할당."""
+    if agent_id not in _ID_COLOR_MAP:
+        # COLORS 개수보다 id 수가 적으면 전부 고유 색상
+        # (필요시 아래 % 연산으로 초과시 순환 가능하지만 요구사항상 보통 필요 없음)
+        idx = len(_ID_COLOR_MAP) % len(COLORS)
+        _ID_COLOR_MAP[agent_id] = COLORS[idx]
+    return _ID_COLOR_MAP[agent_id]
+
 def trackbar(val):
     pass
 
@@ -195,26 +205,53 @@ def draw_agent_info_window(agents, preset_ids, total_height, selected_robot_id=N
 
 # 그리드에 에이전트 포인트 그리기
 def draw_agent_points(vis_img, agents):
+    radius = 5  # 기존 원 크기와 동일
+
     for agent in agents:
+        aid = agent.id
+        color = _color_for_id(aid)
+
+        # Start (원 + "id:(id)")
         if agent.start:
-            x, y = agent.start[1] * cell_size, agent.start[0] * cell_size
-            cv2.circle(vis_img, (x + cell_size//2, y + cell_size//2), 5, (0, 255, 0), -1)
-            cv2.putText(vis_img, f"S{agent.id}", (x + 2, y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+            sx, sy = agent.start[1] * cell_size, agent.start[0] * cell_size
+            scx, scy = sx + cell_size//2, sy + cell_size//2
+            cv2.circle(vis_img, (scx, scy), radius, color, -1)
+            cv2.putText(vis_img, f"id:{aid}", (sx + 2, sy + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+        # Goal (삼각형 + "G(id)")
         if agent.goal:
-            x, y = agent.goal[1] * cell_size, agent.goal[0] * cell_size
-            cv2.circle(vis_img, (x + cell_size//2, y + cell_size//2), 5, (0, 0, 255), -1)
-            cv2.putText(vis_img, f"G{agent.id}", (x + 2, y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+            gx, gy = agent.goal[1] * cell_size, agent.goal[0] * cell_size
+            gcx, gcy = gx + cell_size//2, gy + cell_size//2
+
+            # 같은 '크기감'을 위해 원의 radius를 기준으로 등변삼각형 좌표 생성(위쪽 뾰족)
+            p_top    = (gcx, gcy - radius)
+            p_left   = (gcx - int(radius*0.866), gcy + int(radius*0.5))  # cos60=0.5, sin60≈0.866
+            p_right  = (gcx + int(radius*0.866), gcy + int(radius*0.5))
+            tri = np.array([p_top, p_left, p_right], dtype=np.int32)
+            cv2.fillConvexPoly(vis_img, tri, color)
+
+            cv2.putText(vis_img, f"G({aid})", (gx + 2, gy + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
 # CBS 경로 그리기
 def draw_paths(vis_img, paths):
-    for idx, path in enumerate(paths):
-        color = COLORS[idx % len(COLORS)]
+    for idx, item in enumerate(paths):
+        # item이 (aid, path) 형태인지 확인
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], (list, tuple)):
+            aid, path = item
+            color = _color_for_id(int(aid))
+        else:
+            path = item
+            color = COLORS[idx % len(COLORS)]  # 호환성 fallback
+
         for pos in path:
             r, c = pos
             x, y = c * cell_size, r * cell_size
             overlay = vis_img.copy()
             cv2.rectangle(overlay, (x, y), (x + cell_size, y + cell_size), color, -1)
             cv2.addWeighted(overlay, 0.3, vis_img, 0.7, 0, vis_img)
+
 
 def draw_agent_delays_on_grid(vis_img, agents, home_positions=None):
     """

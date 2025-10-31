@@ -215,6 +215,10 @@ class RobotController:
                                     target_yaw = math.degrees(math.atan2(-vec_for_angle[1], vec_for_angle[0])) + 180
 
                                     delta = self._normalize_delta_deg(target_yaw - current_yaw)
+                                    
+                                    if cmd.startswith("T"):
+                                        delta = self._normalize_delta_deg(delta + 5.0)
+
 
                                     # ✅ 항상 두 단계(회전 + 직진)로 보냄
                                     rot_deg = round(abs(delta), 1)
@@ -305,7 +309,11 @@ class RobotController:
 
                 if is_yield:
                     self._pending_moves[rid] = {"command_set": command_set, "two_stage_reason": two_stage_reason}
-                    print(f"⏸️ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → YIELD 보류 (pkg={len(command_set)})")
+                    self.step_yield.add(rid)
+                    self.yield_block_cell[rid] = my_dst
+                    # ✅ 양보 중이라도 이번 스텝의 배리어 대상에 '포함'시켜 스킵을 막는다
+                    self.step_inflight.add(rid)
+                    print(f"⏸️ [Step {self.current_step+1}] [Robot{rid}] → YIELD 보류 (pkg={len(command_set)})")
                 else:
                     payload = json.dumps({
                         "commands": [{
@@ -378,8 +386,12 @@ class RobotController:
                     })
                     self.client.publish(self.mqtt_topic_commands, payload)
                 elif "command" in pkg:
-                    # 하위호환(혹시 남아있을 경우)
                     self._publish(rid, [{"command": pkg["command"]}])
+
+                self.inflight[rid] = True
+                self.robot_indices[rid] = self.current_step + 1
+                self.step_inflight.add(rid)   # (중복 안전)
+
                 released.append(rid)
         if released:
             print(f"🚦 GO (YIELD 해제): {released}")
