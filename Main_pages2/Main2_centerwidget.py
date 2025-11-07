@@ -95,7 +95,7 @@ class GridTextureView(Image):
 # =================== CenterWidget ===================
 class CenterWidget(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', size_hint_x=0.25, **kwargs)
+        super().__init__(orientation='vertical', size_hint_x=0.4, **kwargs)
         self.selected_robot_id = None
         self.current_scenario_mode = "test"   # 초기 모드
         self.current_solver = "CBS"           # solver 기본값

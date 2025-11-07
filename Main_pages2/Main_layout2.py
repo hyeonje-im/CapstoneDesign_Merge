@@ -7,7 +7,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.graphics import Color, Rectangle
 from Main_pages2.Main2_topbar import TopBar
-from Main_pages2.Main2_leftwidget import LeftWidget
+#from Main_pages2.Main2_leftwidget import LeftWidget
 from Main_pages2.Main2_centerwidget import CenterWidget
 from Main_pages2.Main2_rightwidget import RightWidget
 from Utilities.UI_utilities import KLabel, KLine
@@ -30,10 +30,11 @@ class MainLayout2(Screen):
 
         # 하단 3분할
         bottom_row = BoxLayout(orientation='horizontal', spacing=5)
-
+        
+    
         # 왼쪽 위젯
-        left_widget = LeftWidget()
-        bottom_row.add_widget(left_widget)
+        #left_widget = LeftWidget()
+        #bottom_row.add_widget(left_widget)
 
         # 중앙 위젯
         center_widget = CenterWidget()

@@ -30,7 +30,7 @@ class KButton(ButtonBehavior, BoxLayout):
 
 class TopBar(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation='horizontal', size_hint_y=0.1, padding=5, spacing=5, **kwargs)
+        super().__init__(orientation='horizontal', size_hint_y=0.05, padding=5, spacing=5, **kwargs)
 
         with self.canvas.before:
             Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
@@ -42,8 +42,8 @@ class TopBar(BoxLayout):
         self.main_button.bind(on_press=self.on_main_press)
         self.add_widget(self.main_button)
 
-        # === 버튼 2: 컨트롤러 ===
-        self.controller_button = KButton(text="컨트롤러")
+        # === 버튼 2: 시나리오 ===
+        self.controller_button = KButton(text="시나리오")
         
         self.add_widget(self.controller_button)
 
