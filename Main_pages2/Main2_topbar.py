@@ -43,12 +43,12 @@ class TopBar(BoxLayout):
         self.add_widget(self.main_button)
 
         # === 버튼 2: 시나리오 ===
-        self.controller_button = KButton(text="시나리오")
+        self.controller_button = KButton(text="단일 제어 모드")
         
         self.add_widget(self.controller_button)
 
         # === 버튼 3: 추가기능 ===
-        self.extra_button = KButton(text="추가기능")
+        self.extra_button = KButton(text="시나리오 모드")
         self.extra_button.bind(on_press=self.on_extra_press)
         self.add_widget(self.extra_button)
 

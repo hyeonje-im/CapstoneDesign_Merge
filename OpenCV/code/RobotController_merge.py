@@ -1,4 +1,3 @@
-
 # import time
 # import json
 # import paho.mqtt.client as mqtt
@@ -26,12 +25,21 @@ class RobotController:
         done_topic: str = "robot/done",
         north_tag_id: int | None = None,
         direction_corr_threshold_deg: float = 3.0,
-        alignment_delay_sec: float = 0.5,
-        step_transition_delay_sec: float = 0.5,
+        alignment_delay_sec: float = 0.2,
+        step_transition_delay_sec: float = 0.2,
         alignment_angle: float = 1.0,
         alignment_dist: float = 1.0,
+        
     ):
-        # 통신
+        # ▼▼▼▼▼ [추가] 관성 제어를 위한 변수 ▼▼▼▼▼
+        # 이 각도(도) 이상일 때 회전/직진 명령을 분리합니다. (90도는 분리 안 함)
+        self.large_angle_threshold_deg = 150.0 
+        # 회전 완료(DONE) 후 직진을 보내기 전까지 PC에서 대기할 시간(초)
+        self.large_angle_settle_delay_sec = 0.25  # 250ms
+        # 분리된 직진 명령을 임시 저장하는 곳 {rid: "F15_modeA"}
+        self._pending_move_cmd: dict[str, str] = {}
+        # ▲▲▲▲▲ [추가] ▲▲▲▲▲
+        
         self.client = client
         self.mqtt_topic_commands = mqtt_topic_commands
         self.done_topic = done_topic
@@ -215,11 +223,12 @@ class RobotController:
                                     target_yaw = math.degrees(math.atan2(-vec_for_angle[1], vec_for_angle[0])) + 180
 
                                     delta = self._normalize_delta_deg(target_yaw - current_yaw)
-                                    
+
                                     if cmd.startswith("T"):
+                                        print(f"🔵 [T-Command 보정] 원본 delta: {delta:.1f}°")
                                         delta = self._normalize_delta_deg(delta + 5.0)
-
-
+                                        print(f"   => 보정 후 delta: {delta:.1f}°")
+                                    
                                     # ✅ 항상 두 단계(회전 + 직진)로 보냄
                                     rot_deg = round(abs(delta), 1)
                                     if rot_deg < 0.1:
@@ -228,8 +237,17 @@ class RobotController:
                                     pre_cmd = f"{rot_cmd_letter}{rot_deg}_modeOnly"
                                     mov_cmd = f"F{dist_cm:.1f}_modeA"
 
-                                    command_set = [{"command": pre_cmd}, {"command": mov_cmd}]
-                                    two_stage_reason = "ALIGN_MOVE"
+                                    is_large_angle = abs(delta) >= self.large_angle_threshold_deg
+                                    if is_large_angle:
+                                        # [분리 전송] 직진은 보류하고 회전만 전송
+                                        self._pending_move_cmd[rid] = mov_cmd
+                                        command_set = [{"command": pre_cmd}]
+                                        two_stage_reason = "ALIGN_MOVE_SPLIT"
+                                    else:
+                                        # [기존 방식] 작은 각도는 한 번에 전송
+                                        command_set = [{"command": pre_cmd}, {"command": mov_cmd}]
+                                        two_stage_reason = "ALIGN_MOVE"
+                                    # ▲▲▲▲▲ [수정] ▲▲▲▲▲
                                 else:
                                     command_set = [{"command": "Stay"}]
 
@@ -279,8 +297,17 @@ class RobotController:
                                     speed_mode = "modeB" if cmd[0] in ("R", "L") else "modeC"
                                     mov_cmd = f"F{dist_cm:.1f}_{speed_mode}"
 
-                                    command_set = [{"command": rot_cmd}, {"command": mov_cmd}]
-                                    two_stage_reason = "ROT→CENTER_MOVE"
+                                    is_large_angle = abs(delta) >= self.large_angle_threshold_deg
+                                    if is_large_angle:
+                                        # [분리 전송] 직진은 보류하고 회전만 전송
+                                        self._pending_move_cmd[rid] = mov_cmd
+                                        command_set = [{"command": rot_cmd}]
+                                        two_stage_reason = "ROT→CENTER_MOVE_SPLIT"
+                                    else:
+                                        # [기존 방식] 작은 각도는 한 번에 전송
+                                        command_set = [{"command": rot_cmd}, {"command": mov_cmd}]
+                                        two_stage_reason = "ROT→CENTER_MOVE"
+                                    # ▲▲▲▲▲ [수정] ▲▲▲▲▲
                                 else:
                                     command_set = [{"command": "Stay"}]
 
@@ -309,11 +336,7 @@ class RobotController:
 
                 if is_yield:
                     self._pending_moves[rid] = {"command_set": command_set, "two_stage_reason": two_stage_reason}
-                    self.step_yield.add(rid)
-                    self.yield_block_cell[rid] = my_dst
-                    # ✅ 양보 중이라도 이번 스텝의 배리어 대상에 '포함'시켜 스킵을 막는다
-                    self.step_inflight.add(rid)
-                    print(f"⏸️ [Step {self.current_step+1}] [Robot{rid}] → YIELD 보류 (pkg={len(command_set)})")
+                    print(f"⏸️ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → YIELD 보류 (pkg={len(command_set)})")
                 else:
                     payload = json.dumps({
                         "commands": [{
@@ -386,12 +409,8 @@ class RobotController:
                     })
                     self.client.publish(self.mqtt_topic_commands, payload)
                 elif "command" in pkg:
+                    # 하위호환(혹시 남아있을 경우)
                     self._publish(rid, [{"command": pkg["command"]}])
-
-                self.inflight[rid] = True
-                self.robot_indices[rid] = self.current_step + 1
-                self.step_inflight.add(rid)   # (중복 안전)
-
                 released.append(rid)
         if released:
             print(f"🚦 GO (YIELD 해제): {released}")
@@ -461,6 +480,33 @@ class RobotController:
         print(f"✅ [Robot_{robot_id}] 명령 ({cmd_info}) 완료")
         if self.inflight is not None:
             self.inflight[robot_id] = False
+        
+        # ▼▼▼▼▼ [추가] 분리된 직진 명령(SPLIT) 처리 ▼▼▼▼▼
+        if "mode=modeOnly" in payload and robot_id in self._pending_move_cmd:
+            
+            # 1. 보류 중인 직진 명령을 가져오고 딕셔너리에서 제거
+            mov_cmd_str = self._pending_move_cmd.pop(robot_id, None)
+            
+            if mov_cmd_str:
+                print(f"▶ [Robot_{robot_id}] 회전(modeOnly) 완료. 관성 정착을 위해 {self.large_angle_settle_delay_sec}초 대기...")
+                
+                mov_cmd_set = [{"command": mov_cmd_str}]
+                
+                # 2. PC에서 지연 후 직진 명령을 전송하는 함수
+                def _send_pending_move():
+                    if not self.active: # 전송 직전 시퀀스가 중단됐으면 취소
+                        print(f"▶ [Robot_{robot_id}] (취소) 시퀀스가 중단되어 직진({mov_cmd_str})을 보내지 않습니다.")
+                        return
+                        
+                    print(f"▶ [Robot_{robot_id}] 지연 시간 종료. 직진({mov_cmd_str}) 전송 실행.")
+                    self._publish(robot_id, mov_cmd_set) 
+                    
+                # 3. 타이머 시작 (이 함수는 즉시 리턴됨)
+                threading.Timer(self.large_angle_settle_delay_sec, _send_pending_move).start()
+                
+                # 4. 이 modeOnly는 스텝 완료가 아니므로 여기서 함수 종료
+                return 
+        # ▲▲▲▲▲ [추가] ▲▲▲▲▲
 
         # ---------- (A) 정렬 반복: modeOnly 완료 후 지연 재시도 ----------
         if "mode=modeOnly" in payload and robot_id in self.alignment_pending:
@@ -733,36 +779,41 @@ class RobotController:
     def set_alignment_completion_callback(self, cb):
         self._align_cb = cb  # cb(robot_id: str)
 
-    def run_align_sequence(self, preset_ids, *, do_release=False, settle_sec=0.5):
-        if do_release:
-            self._release(preset_ids)
-        # (1) 센터 정렬: 단일 전송
+    def run_align_sequence(self, preset_ids, *, do_release=False):
+        if do_release: self._release(preset_ids)
+        time.sleep(self.alignment_delay_sec)             # 도착 직후 0.3s 정지
         self.run_center_align(preset_ids, do_release=False)
 
         def _one(rid):
             rid = str(rid)
+            # (1) 센터 완료 대기
+            while True:
+                info = self.alignment_pending.get(rid)
+                if not info or info.get("mode") != "center": break
+                time.sleep(0.1)
+            if not self.check_center_alignment_ok(rid):
+                self.run_center_align([rid], do_release=False); return
+            time.sleep(self.alignment_delay_sec)      # 0.3s
 
-            # a) 센터 pending 끝날 때까지 대기 (내부가 delay 재확인 처리)
-            while self.alignment_pending.get(rid, {}).get("mode") == "center":
-                time.sleep(0.05)
-
-            # b) 카메라 프레임 안정화 버퍼
-            time.sleep(settle_sec)
-
-            # c) 방향 정렬: 단일 전송
+            # (2) 방향 정렬 시작
             self.run_direction_align([rid], do_release=False)
 
-            # d) 방향 pending 끝날 때까지 대기
-            while self.alignment_pending.get(rid, {}).get("mode") == "direction":
-                time.sleep(0.05)
+            # (3) 방향 완료 대기
+            while True:
+                info = self.alignment_pending.get(rid)
+                if not info or info.get("mode") != "direction": break
+                time.sleep(0.1)
+            if not self.check_direction_alignment_ok(rid):
+                self.run_direction_align([rid], do_release=False); return
 
-            # (선택) 완료 콜백
+            time.sleep(self.alignment_delay_sec)      # 방향 끝난 뒤 0.3s
+
+            # (4) 전체 정렬 완료 신호 (다른 로봇 이동은 계속)
             if hasattr(self, "_align_cb") and self._align_cb:
                 self._align_cb(rid)
 
         for rid in preset_ids:
             threading.Thread(target=_one, args=(rid,), daemon=True).start()
-
 
     def aligned_recently(self, robot_id: str | int, within_sec: float = 0.3) -> bool:
         ts = self._last_align_ok_ts.get(str(robot_id))

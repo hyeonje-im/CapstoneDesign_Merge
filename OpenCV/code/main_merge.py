@@ -6,6 +6,8 @@ import subprocess
 import math
 import time
 from queue import Queue, Empty
+import threading  # ◀◀◀ [추가]
+import copy
 
 # UI 연동 관련
 
@@ -105,17 +107,43 @@ controller = RobotController(
 )
 
 if USE_MQTT:
-    def _on_msg(c, u, m):
-        try:
-            controller.on_mqtt_message(m.topic, m.payload)
-        except Exception as e:
-            print(f"[on_message error] {e}")
+    def _on_msg(c, u, m):  # ◀◀◀ [수정 시작]
+            try:
+                topic = m.topic
+                payload_str = m.payload.decode("utf-8", "ignore")
+
+                # 1. 컨트롤러가 처리할 'DONE' 메시지
+                if topic == controller.done_topic:
+                    controller.on_mqtt_message(topic, payload_str)
+                
+                # 2. 새로 추가된 'STATUS' 메시지 (예: "robot/3/status")
+                elif topic.endswith("/status"):
+                    # (페이로드 예: "STATUS;Robot_3;msg=QueueCleared")
+                    if "QueueCleared" in payload_str:
+                        print(f"✅ [Robot Status] 로봇 큐가 비워졌습니다! ({payload_str})")
+                    elif "QueueEmpty" in payload_str:
+                        print(f"ℹ️ [Robot Status] 로봇이 연결되었으며, 큐가 비어있습니다. ({payload_str})")
+                    elif "QueueNotEmpty" in payload_str:
+                        # '유지된 메시지'가 있었다는 뜻입니다.
+                        print(f"⚠️ [Robot Status] 로봇 연결됨. 큐가 비어있지 않습니다! ({payload_str})")
+                    else:
+                        print(f"[Robot Status] {topic}: {payload_str}")
+                
+                # 3. 그 외 (필요시)
+                # else:
+                #    print(f"[MQTT Recv] {topic}: {payload_str}")
+
+            except Exception as e:
+                print(f"[on_message error] {e}")
 
     client.on_message = _on_msg
 
     try:
         client.subscribe(controller.done_topic)
         # client.loop_start()  # init_mqtt_client 안에서 이미 실행 중이면 생략
+        status_topic = "robot/+/status"  # ◀◀◀ [추가]
+        client.subscribe(status_topic)   # ◀◀◀ [추가]
+        print(f"▶ MQTT 구독: {controller.done_topic}, {status_topic}") # ◀◀◀ [추가]
     except Exception:
         pass
 
@@ -147,7 +175,7 @@ grid_array = None
 visualize = True
 # tag_info 전역 변수 초기화
 tag_info = {}
-set_tag_info_provider(lambda: tag_info)
+set_tag_info_provider(get_tag_info_safe)
 
 # 비전 시스템 초기화
 #video_path = r"C:/img/test2.mp4"
@@ -166,6 +194,16 @@ vision.correction_coef_getter = lambda: correction_coef_value
 PRESET_IDS = []
 selected_robot_id = None
 
+TAG_INFO_LOCK = threading.Lock()
+
+def get_tag_info_safe():  # ◀◀◀ [추가 시작]
+    """
+    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
+    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
+     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
+    """
+    with TAG_INFO_LOCK:
+        return copy.deepcopy(tag_info)
 
 def compute_visible_robot_ids(tag_info: dict) -> list[int]:
     """카메라에 잡힌 '로봇' 태그 ID를 정렬 리스트로 반환 (보드/NORTH_TAG_ID 제외)."""
@@ -425,7 +463,7 @@ scenario = ScenarioManager(
     agents_ref=agents,
     paths_ref=paths,
     get_grid=lambda: grid_array,
-    get_tag_info=lambda: tag_info,
+    get_tag_info=get_tag_info_safe,
     path_to_commands=path_to_commands,
     get_initial_hd=get_initial_hd,
     mode=TestMode()  # 필요시 다른 모드로 교체
@@ -586,12 +624,14 @@ def main():
 
         # 2) 새 프레임 기반으로 화면/태그 정보 먼저 갱신
         frame = visionOutput["frame"]
-        tag_info = visionOutput["tag_info"]
+        with TAG_INFO_LOCK:  # ◀◀◀ [추가] (쓰기 보호)
+            tag_info = visionOutput["tag_info"]
         controller.set_tag_info_provider(lambda: tag_info)
         
 
         # 3) 새 tag_info로 PRESET_IDS 갱신
         _prev = PRESET_IDS[:]
+        current_tags_safe = get_tag_info_safe()
         new_ids = compute_visible_robot_ids(tag_info)
         PRESET_IDS[:] = new_ids
         scenario.tick()
