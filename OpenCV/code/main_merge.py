@@ -174,6 +174,16 @@ pathfinder = None
 grid_array = None
 visualize = True
 # tag_info 전역 변수 초기화
+
+def get_tag_info_safe():  # ◀◀◀ [추가 시작]
+    """
+    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
+    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
+     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
+    """
+    with TAG_INFO_LOCK:
+        return copy.deepcopy(tag_info)
+
 tag_info = {}
 set_tag_info_provider(get_tag_info_safe)
 
@@ -196,14 +206,6 @@ selected_robot_id = None
 
 TAG_INFO_LOCK = threading.Lock()
 
-def get_tag_info_safe():  # ◀◀◀ [추가 시작]
-    """
-    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
-    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
-     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
-    """
-    with TAG_INFO_LOCK:
-        return copy.deepcopy(tag_info)
 
 def compute_visible_robot_ids(tag_info: dict) -> list[int]:
     """카메라에 잡힌 '로봇' 태그 ID를 정렬 리스트로 반환 (보드/NORTH_TAG_ID 제외)."""
@@ -469,7 +471,6 @@ scenario = ScenarioManager(
     mode=TestMode()  # 필요시 다른 모드로 교체
 )
 
-FrameBus.set_mode(_mode_keys[_mode_idx[0]])   # 초기 모드값 UI로 전달
 
 # 마우스 콜백(수동 모드일 때는 수동 핸들러로 보냄)
 def unified_mouse(event, x, y, flags, param):

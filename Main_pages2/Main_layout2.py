@@ -4,12 +4,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
 from kivy.graphics import Color, Rectangle
 from Main_pages2.Main2_topbar import TopBar
 #from Main_pages2.Main2_leftwidget import LeftWidget
-from Main_pages2.Main2_centerwidget import CenterWidget
-from Main_pages2.Main2_grid import GridWidget
+from Main_pages2.Main2_centerwidget import SingleControl
 from Main_pages2.Main2_rightwidget import RightWidget
 from Utilities.UI_utilities import KLabel, KLine
 
@@ -38,7 +36,7 @@ class MainLayout2(Screen):
         #bottom_row.add_widget(left_widget)
 
         # 중앙 위젯
-        center_widget = CenterWidget()
+        center_widget = SingleControl()
         bottom_row.add_widget(center_widget)
 
         # 오른쪽 위젯
