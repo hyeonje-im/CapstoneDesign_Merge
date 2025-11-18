@@ -114,51 +114,50 @@ class KButton(ButtonBehavior, BoxLayout):
 
 
 
-class KRoundSquareButton(ButtonBehavior, BoxLayout):
-    def __init__(self, text="", size=40, height = 30, **kwargs):
+class KRoundedButton(ButtonBehavior, BoxLayout):
+    def __init__(self, text, height=30, width=100, **kwargs):
         super().__init__(**kwargs)
-        
-        self.width = width
+
         self.height = height
+        self.width = width
         self.text = text
 
-        # 색상 정의 (기존 KButton과 동일)
-        self.normal_color = (0x2E/255, 0x33/255, 0x49/255, 1)  # 밝은 셀
-        self.down_color   = (0x25/255, 0x28/255, 0x3B/255, 1)  # 어두운 셀
+        # 색상 정의
+        self.normal_color = (0x2E/255, 0x33/255, 0x49/255, 1)
+        self.down_color   = (0x25/255, 0x28/255, 0x3B/255, 1)
 
-        # 배경 + 테두리 (라운드 처리)
+        # 라운딩 반경
+        self.radius = [5, 5, 5, 5]
+
+        # 배경 + 테두리
         with self.canvas.before:
             Color(*self.normal_color)
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[5, 5, 5, 5])
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
+
         with self.canvas.after:
             Color(0, 0, 0, 1)
-            self.border = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, 5), width=1)
+            self.border = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, *self.radius), width=1)
 
         self.bind(pos=self._update_graphics, size=self._update_graphics)
 
         # 내부 텍스트
-        from kivy.uix.label import Label
-        from kivy.utils import get_color_from_hex
-        font_path = "assets/fonts/Pretendard-Regular.otf"
-        self.label = Label(text=text, font_size=13, color=(1, 1, 1, 1), font_name=font_path)
+        self.label = KLabel(text=text, font_size=13, color=(1, 1, 1, 1))
         self.add_widget(self.label)
 
     def _update_graphics(self, *args):
+        # 배경 업데이트
         self.bg.pos = self.pos
         self.bg.size = self.size
-        self.border.rounded_rectangle = (self.x, self.y, self.width, self.height, 5)
 
-    def _sync_size(self, *args):
-        # 가로/세로가 항상 동일하도록 강제
-        side = min(self.width, self.height)
-        self.size = (side, side)
+        # 테두리 업데이트
+        self.border.rounded_rectangle = (self.x, self.y, self.width, self.height, *self.radius)
 
     def on_press(self):
         with self.canvas.before:
             Color(*self.down_color)
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[5, 5, 5, 5])
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
 
     def on_release(self):
         with self.canvas.before:
             Color(*self.normal_color)
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[5, 5, 5, 5])
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)

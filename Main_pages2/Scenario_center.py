@@ -7,7 +7,7 @@ from kivy.uix.anchorlayout import AnchorLayout
 from Utilities.UI_utilities import KLine, KButton, KLabel
 from OpenCV.code.ui_bridge import FrameBus, post
 from Main_pages2.Main2_grid import GridWidget
-
+from Main_pages2.Scenario_orderlist import ScenarioOrderList
 
 # ======================= GroupBox (새로운 방식) =======================
 class GroupBox(BoxLayout):
@@ -80,10 +80,23 @@ class ScenarioCenterWidget(BoxLayout):
             self.border = KLine(self)
         self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # ================= 상단 GridView (0.5) =================
-        upper = AnchorLayout(size_hint_y=0.5)
-        self.grid_view = GridWidget(size_hint=(0.9, 0.9))
-        upper.add_widget(self.grid_view)
+        # ================= 상단 구역 =================
+        upper = BoxLayout(orientation="horizontal",
+                            size_hint_y=0.5,
+                            spacing=10,
+                            padding=10)
+
+        # ------ 왼쪽: 주문 리스트 -------
+        self.order_list = ScenarioOrderList(size_hint_x=1)
+        upper.add_widget(self.order_list)
+
+        # ------ 오른쪽: 기존 GridWidget ------
+        grid_holder = AnchorLayout(size_hint_x=1,)
+        self.grid_view = GridWidget(size_hint=(0.95, 0.95))
+        grid_holder.add_widget(self.grid_view)
+
+        upper.add_widget(grid_holder)
+
         self.add_widget(upper)
 
         # ================= 하단 버튼 그룹 (2×2 그리드) =================

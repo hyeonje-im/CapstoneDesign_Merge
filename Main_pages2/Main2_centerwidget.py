@@ -113,7 +113,7 @@ class SingleControl(BoxLayout):
         grid_holder = AnchorLayout(anchor_x='center', anchor_y='center')
 
         # OpenCV 이미지 대신 Kivy Widget으로 변경
-        self.grid_view = GridWidget(size_hint=(0.9, 0.9))
+        self.grid_view = GridWidget(size_hint=(0.95, 0.95))
         grid_holder.add_widget(self.grid_view)
 
         upper.add_widget(grid_holder)
