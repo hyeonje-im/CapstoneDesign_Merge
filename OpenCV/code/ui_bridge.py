@@ -178,6 +178,18 @@ class FrameBus:
         with cls._lock:
             return cls._warped
 
+        # ====================
+    # --- Orders (BK → UI) ---
+    # ====================
+    @classmethod
+    def set_orders(cls, orders: dict):
+        with cls._lock:
+            cls._orders = orders.copy()
+
+    @classmethod
+    def get_orders(cls):
+        with cls._lock:
+            return cls._orders.copy() if cls._orders else None
 
     # ===================
     # UI → Backend 명령큐

@@ -145,6 +145,7 @@ class VisionSystem:
             if occ is not None:
                 self._last_obstacle_grid = (occ.astype('uint8'))
                 self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
+                FrameBus.set_grid_state(self._last_obstacle_grid)
 
             # 2) src/dst 준비
             #   - src: 보드 4코너(원본 픽셀 좌표)
@@ -198,6 +199,20 @@ class VisionSystem:
             FrameBus.set_warped(warped_color)
             #============================
             #============================
+        # === 로봇 heading 업데이트 ===
+        headings = {}
+        for tag_id, data in tag_info.items():
+            if data.get("status") != "On":
+                continue
+            # VisionSystem에서 계산된 방향 값
+            heading = data.get("yaw_front_to_north_deg")
+            if heading is not None:
+                headings[tag_id] = heading
+
+        FrameBus.set_headings(headings)
+
+
+
 
         return {
             "frame": display_frame,

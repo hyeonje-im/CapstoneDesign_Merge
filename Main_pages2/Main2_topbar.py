@@ -35,7 +35,7 @@ class KButton(ButtonBehavior, BoxLayout):
 
 class TopBar(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation='horizontal', size_hint_y=0.05, padding=5, spacing=5, **kwargs)
+        super().__init__(orientation='horizontal', size_hint_y=0.1, padding=5, spacing=5, **kwargs)
 
         with self.canvas.before:
             Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)

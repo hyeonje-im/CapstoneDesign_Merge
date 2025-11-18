@@ -12,6 +12,7 @@ import time
 import threading
 from OpenCV.code.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
 from typing import Optional, Callable
+from OpenCV.code.ui_bridge import FrameBus
 import math  # 추가
 import numpy as np  # 추가
 
@@ -180,6 +181,10 @@ class RobotController:
             src_by_robot = {k: v.get("src") for k, v in plan.items()}
             dst_by_robot = {k: v.get("dst") for k, v in plan.items()}
             src_set = set(src_by_robot.values()) if src_by_robot else set()
+
+            if dst_by_robot:
+                FrameBus.set_goal_positions(dst_by_robot)
+
 
             for rid in actual_targets:
                 cmd_raw = self.robot_command_map[rid][self.current_step]
@@ -352,6 +357,9 @@ class RobotController:
                     self.inflight[rid] = True
                     self.robot_indices[rid] = self.current_step + 1
                     self.step_inflight.add(rid)
+            
+            if dst_by_robot:
+                FrameBus.set_goal_positions(dst_by_robot)
 
             if self.step_inflight:
                 print(f"▶ Step {self.current_step+1}/{self.max_steps} 전송 대상: {sorted(list(self.step_inflight))}")
@@ -480,6 +488,24 @@ class RobotController:
         print(f"✅ [Robot_{robot_id}] 명령 ({cmd_info}) 완료")
         if self.inflight is not None:
             self.inflight[robot_id] = False
+
+        # ---------------------------------------------------------
+        # 🔥 2) 여기서 로봇의 실제 최신 위치를 UI에 보내기
+        # ---------------------------------------------------------
+        tag_info = self.tag_info_provider() if self.tag_info_provider else {}
+        agent_states = {}
+
+        for tid, data in tag_info.items():
+            if data.get("status") == "On":
+                gp = data.get("grid_position")   # (r, c)
+                if gp:
+                    agent_states[str(tid)] = gp
+
+        # UI 반영
+        FrameBus.set_agent_states(agent_states)
+        # ---------------------------------------------------------
+        # 🔥 수정 끝
+        # ---------------
         
         # ▼▼▼▼▼ [추가] 분리된 직진 명령(SPLIT) 처리 ▼▼▼▼▼
         if "mode=modeOnly" in payload and robot_id in self._pending_move_cmd:

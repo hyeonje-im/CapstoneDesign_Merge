@@ -71,10 +71,11 @@ def make_brightcell(text, **kwargs):
     return box
 
 class KButton(ButtonBehavior, BoxLayout):
-    def __init__(self, text, **kwargs):
+    def __init__(self, text, height = 30, width = 100, **kwargs):
         super().__init__(**kwargs)
-        self.size_hint_y = None
-        self.height = 30
+        
+        self.height = height
+        self.width = width
         self.text = text
 
         # 색상 정의
@@ -114,10 +115,11 @@ class KButton(ButtonBehavior, BoxLayout):
 
 
 class KRoundSquareButton(ButtonBehavior, BoxLayout):
-    def __init__(self, text="", size=40, **kwargs):
+    def __init__(self, text="", size=40, height = 30, **kwargs):
         super().__init__(**kwargs)
-        self.size_hint = (None, None)
-        self.size = (size, size)   # 정사각형 고정
+        
+        self.width = width
+        self.height = height
         self.text = text
 
         # 색상 정의 (기존 KButton과 동일)

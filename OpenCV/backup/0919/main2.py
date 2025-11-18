@@ -12,7 +12,7 @@ sys.path.append(os.path.normpath(ICBS_PATH))
 
 
 from grid import load_grid, GRID_FOLDER
-from OpenCV.code.interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths
+from OpenCV.code.interface import grid_visual, slider_create, slider_value, , draw_paths
 from OpenCV.code.config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
 from OpenCV.code.vision.visionsystem import VisionSystem 
 from OpenCV.code.vision.camera import camera_open, Undistorter 

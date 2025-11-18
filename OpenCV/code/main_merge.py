@@ -383,7 +383,7 @@ def handle_number_key_unified(key):
     rid = int(chr(key))
 
     # 1) 모드에 필요한 행동은 매니저가 수행(CBS/정렬 포함)
-    scenario.on_number_key(rid)
+    #scenario.on_number_key(rid)
 
     # 2) 기존 UI 토글 유지
     if rid in SELECTED_RIDS:
