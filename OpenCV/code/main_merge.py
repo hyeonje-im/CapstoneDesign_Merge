@@ -82,7 +82,7 @@ def current_solver() -> str:
 
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
-USE_MQTT = 0 # 0: 비사용, 1: 사용
+USE_MQTT = 1 # 0: 비사용, 1: 사용
 
 if USE_MQTT:
     from OpenCV.code.recieve_message import init_mqtt_client
@@ -646,6 +646,42 @@ def main():
         FrameBus.set_video(frame)
         FrameBus.set_grid(vis)
         
+        # -------------------------------
+        # 🔥 FrameBus로 UI 동기화 보내기
+        # -------------------------------
+        FrameBus.set_grid_state(grid_array)
+
+        # 로봇 위치 업데이트
+        agent_dict = {}
+        for a in agents:
+            if a.start:
+                agent_dict[a.id] = a.start
+        FrameBus.set_agent_states(agent_dict)
+
+        # heading 정보 업데이트
+        heading_dict = {}
+        for rid, data in tag_info.items():
+            if data.get("status") == "On" and "yaw_front_deg" in data:
+                heading_dict[rid] = data["yaw_front_deg"]
+        FrameBus.set_headings(heading_dict)
+
+        # goal(목표지)
+        goal_dict = {}
+        for a in agents:
+            if a.goal:
+                goal_dict[a.id] = a.goal
+        FrameBus.set_goal_positions(goal_dict)
+
+        # home(출발지)
+        FrameBus.set_home_positions(ROBOT_HOME_POSITIONS)
+
+        # CBS 경로
+        path_list = []
+        for a in agents:
+            p = a.get_final_path()
+            if p:
+                path_list.append((a.id, p))
+        FrameBus.set_paths(path_list)
 
         # UI 명령 처리 (버튼 클릭, 키 입력 등)
         # =============================

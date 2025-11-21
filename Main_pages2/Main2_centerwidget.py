@@ -113,7 +113,8 @@ class SingleControl(BoxLayout):
         grid_holder = AnchorLayout(anchor_x='center', anchor_y='center')
 
         # OpenCV 이미지 대신 Kivy Widget으로 변경
-        self.grid_view = GridWidget(size_hint=(0.95, 0.95))
+        self.grid_view = GridWidget(grid_json_path = "OpenCV/grid/0926grid.json",
+                                    size_hint=(0.95, 0.95))
         grid_holder.add_widget(self.grid_view)
 
         upper.add_widget(grid_holder)
@@ -184,6 +185,7 @@ class SingleControl(BoxLayout):
     def select_robot(self, rid):
         self.selected_robot_id = rid
         post("select_robot", rid=rid)
+        FrameBus.set_selected_robot(rid)
         print(f"[UI] robot {rid} selected.")
 
     # ===== Visual/Border 업데이트 =====
@@ -194,20 +196,22 @@ class SingleControl(BoxLayout):
 
     # ===== GridWidget 백엔드 연동 =====
     def update_grid_from_backend(self, dt):
-        """
-        FrameBus → GridWidget 실시간 업데이트
-        """
         grid = FrameBus.get_grid_state()
         agents = FrameBus.get_agent_states()
-        paths = FrameBus.get_paths()
+        goals = FrameBus.get_goal_positions()
         homes = FrameBus.get_home_positions()
+        paths = FrameBus.get_paths()
+        headings = FrameBus.get_headings()
 
         self.grid_view.update_backend_state(
             grid_state=grid,
             agent_states=agents,
-            paths=paths,
+            goal_positions=goals,
             home_positions=homes,
+            paths=paths,
+            agent_headings=headings
         )
+
 
     # ===== 시나리오 모드 동기화 =====
     def sync_scenario_mode(self, dt):

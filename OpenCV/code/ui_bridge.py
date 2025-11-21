@@ -23,6 +23,7 @@ class FrameBus:
     _goal_positions = {}              # {id:(row,col)} (⭐ 새로 추가)
     _headings = {}                    # {id:deg} (⭐ 선택적 - 로봇 방향)
     _scenario_status = "idle"
+    _selected_robot = None
 
     # ====================
     # --- Grid (영상) ---
@@ -190,6 +191,19 @@ class FrameBus:
     def get_orders(cls):
         with cls._lock:
             return cls._orders.copy() if cls._orders else None
+
+
+    _selected_robot = None
+
+    @staticmethod
+    def set_selected_robot(rid):
+        global _selected_robot
+        _selected_robot = rid
+
+    @staticmethod
+    def get_selected_robot():
+        global _selected_robot
+        return _selected_robot
 
     # ===================
     # UI → Backend 명령큐

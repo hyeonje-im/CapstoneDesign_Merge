@@ -1,241 +1,302 @@
-from kivy.uix.widget import Widget
-from kivy.graphics import Color, Rectangle, Line, Ellipse, Triangle
-from kivy.core.text import Label as CoreLabel
-from OpenCV.code.config import grid_row, grid_col
-from OpenCV.code.ui_bridge import post
+import json, os
 import math
 
-# -------------------------------------
-# ID COLOR
-# -------------------------------------
+from kivy.uix.widget import Widget
+from kivy.graphics import (
+    Color, Rectangle, Line, Ellipse, Triangle
+)
+from kivy.core.text import Label as CoreLabel
+from kivy.clock import Clock
+
+from OpenCV.code.ui_bridge import post, FrameBus
+
+
+# -------------------------------
+# 색상 팔레트 (로봇용)
+# -------------------------------
 _ID_COLORS = [
     (0.90, 0.30, 0.30, 1),
     (0.30, 0.70, 0.30, 1),
     (0.30, 0.40, 0.90, 1),
-    (0.90, 0.70, 0.30, 1),
-    (0.70, 0.30, 0.90, 1),
-    (0.30, 0.80, 0.80, 1),
 ]
 
-def color_for_id(rid: int):
-    return _ID_COLORS[int(rid) % len(_ID_COLORS)]
+def color_for_id(rid):
+    rid = int(rid)   # 🔥 rid를 강제로 정수 변환
+    return _ID_COLORS[(rid - 1) % len(_ID_COLORS)]
 
 
-# ==========================================================
-#                        GRID WIDGET
-# ==========================================================
 class GridWidget(Widget):
 
-    def __init__(self, **kwargs):
+    def __init__(self, grid_json_path=None, **kwargs):
         super().__init__(**kwargs)
 
-        self.rows = grid_row
-        self.cols = grid_col
+        # 백엔드에서 받아오는 상태
+        self.grid_state = []        # 2D list/array (0:빈칸, 1:장애물)
+        self.agent_states = {}      # {rid: (r,c)}
+        self.agent_headings = {}    # {rid: heading_deg}
+        self.home_positions = {}    # {rid: (r,c)}
+        self.goal_positions = {}    # {rid: (r,c)}
+        self.paths = []             # [(rid, [(r,c), ...])]
 
-        # FrameBus → UI 동기화 값
-        self.grid_state = None
-        self.agent_states = {}
-        self.paths = {}
-        self.home_positions = {}
-        self.goal_positions = {}
-        self.delays = {}
-        self.headings = {}
+        # JSON Grid가 있으면 초기 로딩
+        if grid_json_path:
+            self.load_grid_from_json(grid_json_path)
 
-        self.bind(pos=self._redraw, size=self._redraw)
+        # 리사이즈 / 이동 시 다시 그리기
+        self.bind(pos=self.update_canvas, size=self.update_canvas)
 
-    # ==========================================================
-    #               백엔드 → UI 값 업데이트
-    # ==========================================================
-    def update_backend_state(
-        self,
-        grid_state=None,
-        agent_states=None,
-        paths=None,
-        home_positions=None,
-        goal_positions=None,
-        delays=None,
-        headings=None,
-    ):
+        # 주기적 리프레시 (백엔드 상태 반영용)
+        Clock.schedule_interval(self.update_canvas, 1 / 30)
+
+
+    # =====================================================
+    # 1) JSON GRID LOAD
+    # =====================================================
+    def load_grid_from_json(self, json_path):
+        if not os.path.exists(json_path):
+            print(f"❌ Grid JSON not found: {json_path}")
+            return
+
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            self.grid_state = data["grid"]
+            print("✅ JSON Grid loaded")
+        except Exception as e:
+            print("❌ JSON load error:", e)
+
+
+    # =====================================================
+    # 2) Backend → UI 업데이트
+    # =====================================================
+    def update_backend_state(self,
+                             grid_state=None,
+                             agent_states=None,
+                             agent_headings=None,
+                             home_positions=None,
+                             goal_positions=None,
+                             paths=None):
+
         if grid_state is not None:
             self.grid_state = grid_state
+
         if agent_states is not None:
-            self.agent_states = dict(agent_states)
-        if paths is not None:
-            self.paths = dict(paths)
+            self.agent_states = agent_states
+
+        if agent_headings is not None:
+            self.agent_headings = agent_headings
+
         if home_positions is not None:
-            self.home_positions = dict(home_positions)
+            self.home_positions = home_positions
+
         if goal_positions is not None:
-            self.goal_positions = dict(goal_positions)
-        if delays is not None:
-            self.delays = dict(delays)
-        if headings is not None:
-            self.headings = dict(headings)
+            self.goal_positions = goal_positions
 
-        self._redraw()
+        if paths is not None:
+            self.paths = paths
 
-    # ==========================================================
-    #                클릭 → 도착지 설정
-    # ==========================================================
+
+    # =====================================================
+    # 3) 마우스 클릭 → 목표지 설정
+    #    (백엔드와 동일한 좌표계 맞추기 위해 row flip)
+    # =====================================================
     def on_touch_down(self, touch):
+
         if not self.collide_point(*touch.pos):
             return super().on_touch_down(touch)
 
+        if self.grid_state is None or len(self.grid_state) == 0:
+            return True
+
+        rows = len(self.grid_state)
+        cols = len(self.grid_state[0])
+
+        # ─ 1) 현재 위젯 안에서의 정사각형 영역 계산 (더미 그리드와 동일)
         side = min(self.width, self.height)
         real_x = self.x + (self.width - side) / 2
         real_y = self.y + (self.height - side) / 2
+        cw = side / cols
+        ch = side / rows
 
-        cell_w = side / self.cols
-        cell_h = side / self.rows
-
-        c = int((touch.x - real_x) / cell_w)
-        r = int((touch.y - real_y) / cell_h)
-
-        if not (0 <= r < self.rows and 0 <= c < self.cols):
+        # 그리드 영역 바깥 클릭이면 무시
+        if not (real_x <= touch.x <= real_x + side and real_y <= touch.y <= real_y + side):
             return super().on_touch_down(touch)
 
-        # SingleControl에서 선택된 로봇 id 얻기
-        root = self.parent.parent
-        rid = getattr(root, "selected_robot_id", None)
+        # ─ 2) 화면 좌표 → grid cell (Kivy 기준 row = 아래에서 위로)
+        local_x = touch.x - real_x
+        local_y = touch.y - real_y
 
-        if rid:
-            rid = int(rid)
-            print(f"[UI] set goal → robot {rid} → ({r},{c})")
+        r_kivy = int(local_y // ch)
+        c_kivy = int(local_x // cw)
 
-            # UI 로컬 즉시 반영
-            self.goal_positions[rid] = (r, c)
-            self._redraw()
+        # ─ 3) 백엔드 row는 위에서 아래로이므로 flip
+        r_backend = (rows - 1) - r_kivy
+        c_backend = c_kivy
 
-            # 백엔드 전달
-            post("set_goal", rid=rid, row=r, col=c)
+        rid = FrameBus.get_selected_robot()
+        if rid is None:
+            print("[GridWidget] No robot selected.")
+            return True
 
-        return super().on_touch_down(touch)
+        post("set_goal", rid=rid, row=r_backend, col=c_backend)
+        print(f"[GridWidget] Goal set → rid={rid}, pos=({r_backend}, {c_backend})")
 
-    # ==========================================================
-    #                      DRAW
-    # ==========================================================
-    def _redraw(self, *args):
+        return True
+
+
+    # =====================================================
+    # 4) 전체 그리기 (더미 그리드와 동일한 스타일)
+    # =====================================================
+    def update_canvas(self, *args):
 
         self.canvas.clear()
 
-        if self.rows == 0 or self.cols == 0:
+        if self.grid_state is None or len(self.grid_state) == 0:
             return
 
-        # 정사각형 유지
+        rows = len(self.grid_state)
+        cols = len(self.grid_state[0])
+
+        # ─ 더미 그리드와 동일: 정사각형 영역 안에 그리드 정렬
         side = min(self.width, self.height)
         real_x = self.x + (self.width - side) / 2
         real_y = self.y + (self.height - side) / 2
-        cell_w = side / self.cols
-        cell_h = side / self.rows
+        cw = side / cols
+        ch = side / rows
 
         with self.canvas:
 
-            # =====================================
-            # 1. 전체 배경
-            # =====================================
+            # ---------------------------------------------
+            # A) 배경
+            # ---------------------------------------------
             Color(0.96, 0.97, 0.99, 1)
             Rectangle(pos=(real_x, real_y), size=(side, side))
 
-            # =====================================
-            # 2. 장애물 + 출발지 + 도착지(원)
-            # =====================================
-            for r in range(self.rows):
-                for c in range(self.cols):
+            # ---------------------------------------------
+            # B) 장애물 (검정색, row flip 적용)
+            # ---------------------------------------------
+            for r in range(rows):
+                for c in range(cols):
+                    if self.grid_state[r][c] == 1:
+                        Color(0.1, 0.1, 0.1, 1)
+                        # y에 (rows-1-r) 적용해서 백엔드와 정방향으로 보여줌
+                        x = real_x + c * cw
+                        y = real_y + (rows - 1 - r) * ch
+                        Rectangle(pos=(x, y), size=(cw, ch))
 
-                    x = real_x + c * cell_w
-                    y = real_y + r * cell_h
+            # ---------------------------------------------
+            # C) CBS 경로 (each rid 색, 투명하게)
+            #    paths: [(rid, [(r,c), ...]), ...]
+            # ---------------------------------------------
+            for rid, path in self.paths:
+                col = color_for_id(rid)
+                for (r, c) in path:
+                    Color(col[0], col[1], col[2], 0.18)
+                    x = real_x + c * cw
+                    y = real_y + (rows - 1 - r) * ch
+                    Rectangle(pos=(x, y), size=(cw, ch))
 
-                    # 장애물
-                    if self.grid_state is not None:
-                        try:
-                            if self.grid_state[r][c] == 1:
-                                Color(0.1, 0.1, 0.1, 1)
-                                Rectangle(pos=(x, y), size=(cell_w, cell_h))
-                        except:
-                            pass
+            # ---------------------------------------------
+            # D) 출발지 (home) 칸 표시
+            # ---------------------------------------------
+            for rid, (r, c) in self.home_positions.items():
+                Color(*color_for_id(rid), 0.35)
+                x = real_x + c * cw
+                y = real_y + (rows - 1 - r) * ch
+                Rectangle(pos=(x, y), size=(cw, ch))
 
-                    # 출발지(셀 전체 연하게)
-                    for rid, (hr, hc) in self.home_positions.items():
-                        if hr == r and hc == c:
-                            Color(0.75, 0.83, 1.0, 0.5)
-                            Rectangle(pos=(x, y), size=(cell_w, cell_h))
+            # ---------------------------------------------
+            # E) 도착지 (goal) — 장애물 양옆 원형 + g1 텍스트
+            # ---------------------------------------------
+            for rid, goal in self.goal_positions.items():
+                if goal is None:
+                    continue
+                (r, c) = goal
+                cx = real_x + (c + 0.5) * cw
+                cy = real_y + (rows - 1 - r + 0.5) * ch  # row flip 적용
+                rad = min(cw, ch) * 0.30
+                col = color_for_id(rid)
 
-                    # 도착지(셀 전체 칠하는 대신 “중앙 원”)
-                    for rid, (gr, gc) in self.goal_positions.items():
-                        if gr == r and gc == c:
-                            cx = x + cell_w / 2
-                            cy = y + cell_h / 2
-                            radius = min(cell_w, cell_h) * 0.30
-                            rcol = color_for_id(int(rid))
-                            Color(rcol[0], rcol[1], rcol[2], 0.75)
-                            Ellipse(pos=(cx - radius, cy - radius),
-                                    size=(radius * 2, radius * 2))
+                Color(col[0], col[1], col[2], 0.75)
+                Ellipse(pos=(cx - rad, cy - rad), size=(2 * rad, 2 * rad))
 
-            # =====================================
-            # 3. GRID LINE
-            # =====================================
+                # g1, g2 ... 텍스트
+                self._draw_small_text(
+                    text=f"g{rid}",
+                    x_cell=c, y_cell=r,
+                    base_x=real_x, base_y=real_y,
+                    cw=cw, ch=ch,
+                    rows=rows
+                )
+
+            # ---------------------------------------------
+            # F) 로봇 아이콘 + 방향 표시 (원 + 화살표 + s1 텍스트)
+            # ---------------------------------------------
+            for rid, (r, c) in self.agent_states.items():
+
+                cx = real_x + (c + 0.5) * cw
+                cy = real_y + (rows - 1 - r + 0.5) * ch
+                rad = min(cw, ch) * 0.28
+                col = color_for_id(rid)
+
+                # 원형 로봇
+                Color(*col)
+                Ellipse(pos=(cx - rad, cy - rad), size=(2 * rad, 2 * rad))
+
+                # 로봇 방향 화살표 (더미 그리드 스타일)
+                if rid in self.agent_headings:
+                    hd = self.agent_headings[rid]   # deg
+                    th = math.radians(hd)
+
+                    tip = (cx + rad * 0.80 * math.cos(th),
+                           cy + rad * 0.80 * math.sin(th))
+                    left = (cx + rad * 0.55 * math.cos(th + 2.4),
+                            cy + rad * 0.55 * math.sin(th + 2.4))
+                    right = (cx + rad * 0.55 * math.cos(th - 2.4),
+                             cy + rad * 0.55 * math.sin(th - 2.4))
+
+                    Color(1, 1, 1, 1)
+                    Triangle(points=[
+                        tip[0], tip[1],
+                        left[0], left[1],
+                        right[0], right[1]
+                    ])
+
+                # s1, s2 ... 텍스트 (출발지 표시)
+                self._draw_small_text(
+                    text=f"s{rid}",
+                    x_cell=c, y_cell=r,
+                    base_x=real_x, base_y=real_y,
+                    cw=cw, ch=ch,
+                    rows=rows
+                )
+
+            # ---------------------------------------------
+            # G) 격자선
+            # ---------------------------------------------
             Color(0.80, 0.84, 0.90, 1)
-            for i in range(self.rows + 1):
-                y = real_y + i * cell_h
+            for i in range(rows + 1):
+                y = real_y + i * ch
                 Line(points=[real_x, y, real_x + side, y], width=1)
 
-            for j in range(self.cols + 1):
-                x = real_x + j * cell_w
+            for j in range(cols + 1):
+                x = real_x + j * cw
                 Line(points=[x, real_y, x, real_y + side], width=1)
 
-            # =====================================
-            # 4. PATH 표시
-            # =====================================
-            for rid, path in self.paths.items():
-                Color(*color_for_id(int(rid)), 0.22)
-                for (pr, pc) in path:
-                    px = real_x + pc * cell_w
-                    py = real_y + pr * cell_h
-                    Rectangle(pos=(px, py), size=(cell_w, cell_h))
 
-            # =====================================
-            # 5. 로봇 + 방향 삼각형
-            # =====================================
-            for rid, (r, c) in self.agent_states.items():
-                cx = real_x + (c + 0.5) * cell_w
-                cy = real_y + (r + 0.5) * cell_h
-                radius = min(cell_w, cell_h) * 0.26
+    # =====================================================
+    # 5) 작은 텍스트 (s1, g1 표시용)
+    # =====================================================
+    def _draw_small_text(self, text, x_cell, y_cell,
+                         base_x, base_y, cw, ch, rows):
 
-                # 로봇 원
-                Color(*color_for_id(int(rid)))
-                Ellipse(pos=(cx - radius, cy - radius), size=(radius * 2, radius * 2))
+        # row flip 반영해서 좌표 계산
+        px = base_x + x_cell * cw + 3
+        py = base_y + (rows - 1 - y_cell) * ch + 3
 
-                # 방향(삼각형)
-                heading_deg = self.headings.get(rid, None)
-                if heading_deg is not None:
-                    theta = math.radians(heading_deg)
-                    tip_x = cx + radius * math.cos(theta)
-                    tip_y = cy + radius * math.sin(theta)
-                    left_x = cx + radius * 0.55 * math.cos(theta + 2.5)
-                    left_y = cy + radius * 0.55 * math.sin(theta + 2.5)
-                    right_x = cx + radius * 0.55 * math.cos(theta - 2.5)
-                    right_y = cy + radius * 0.55 * math.sin(theta - 2.5)
+        lbl = CoreLabel(text=text, font_size=ch * 0.23, color=(0, 0, 0, 1))
+        lbl.refresh()
+        tex = lbl.texture
 
-                    Color(0, 0, 0, 0.9)
-                    Triangle(points=[tip_x, tip_y, left_x, left_y, right_x, right_y])
-
-            # =====================================
-            # 6. S1 / G1 텍스트
-            # =====================================
-            for rid, (rr, cc) in self.home_positions.items():
-                _draw_small_text(f"s{rid}", real_x, real_y, rr, cc, cell_w, cell_h)
-
-            for rid, (rr, cc) in self.goal_positions.items():
-                _draw_small_text(f"g{rid}", real_x, real_y, rr, cc, cell_w, cell_h)
-
-
-# ----------------------------------------------------------
-# 작은 텍스트
-# ----------------------------------------------------------
-def _draw_small_text(text, real_x, real_y, r, c, cell_w, cell_h):
-    x = real_x + c * cell_w + 3
-    y = real_y + r * cell_h + 3
-    lbl = CoreLabel(text=text, font_size=cell_h * 0.25, color=(0, 0, 0, 1))
-    lbl.refresh()
-    texture = lbl.texture
-    Color(0, 0, 0, 1)
-    Rectangle(texture=texture, pos=(x, y), size=texture.size)
+        Color(0, 0, 0, 1)
+        Rectangle(texture=tex, pos=(px, py), size=tex.size)
