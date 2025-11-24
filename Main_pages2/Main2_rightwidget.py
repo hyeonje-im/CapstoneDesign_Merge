@@ -95,7 +95,7 @@ class WarpedFeed(RelativeLayout):
 
 class RightWidget(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', size_hint_x=0.6, **kwargs)
+        super().__init__(orientation='vertical', size_hint_x=0.5, **kwargs)
 
         with self.canvas.before:
             Color(0, 0, 0, 1)

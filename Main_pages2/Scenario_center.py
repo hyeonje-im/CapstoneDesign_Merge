@@ -66,7 +66,7 @@ class GroupBox(BoxLayout):
 # ======================= ScenarioCenterWidget (새로운 방식) =======================
 class ScenarioCenterWidget(BoxLayout):
     def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", size_hint_x=0.45, **kwargs)
+        super().__init__(orientation="vertical", size_hint_x=0.5, **kwargs)
 
         self.current_scenario_mode = "Idle"
         self.current_solver = "CBS"
@@ -82,7 +82,7 @@ class ScenarioCenterWidget(BoxLayout):
 
         # ================= 상단 구역 =================
         upper = BoxLayout(orientation="horizontal",
-                            size_hint_y=0.5,
+                            size_hint_y=0.75,
                             spacing=10,
                             padding=10)
 
@@ -101,28 +101,7 @@ class ScenarioCenterWidget(BoxLayout):
         self.add_widget(upper)
 
         # ================= 하단 버튼 그룹 (2×2 그리드) =================
-        lower = GridLayout(rows=2, cols=2, size_hint_y=0.5, spacing=10)
-
-        # -------- 1. 로봇 선택 --------
-        robot_group = GroupBox(title="로봇 선택")
-        for i in range(1, 5):
-            btn = KButton(text=f"D{i}")
-            btn.bind(on_press=lambda b, rid=i: self.select_robot(rid))
-            robot_group.content.add_widget(btn)
-        lower.add_widget(robot_group)
-
-        # -------- 2. 보드 제어 --------
-        board_group = GroupBox(title="보드 제어")
-        for name, cmd in [
-            ("보드 고정", "lock_board"),
-            ("보드 해제", "unlock_board"),
-            ("ROI 재선택", "start_roi_selection"),
-            ("시각화 ON/OFF", "toggle_visualization"),
-        ]:
-            btn = KButton(text=name)
-            btn.bind(on_press=lambda b, c=cmd: post(c))
-            board_group.content.add_widget(btn)
-        lower.add_widget(board_group)
+        lower = GridLayout(rows=2, cols=2, size_hint_y=0.25, spacing=10)
 
         # -------- 3. 시나리오 제어 --------
         scenario_group = GroupBox(title="시나리오 제어")
@@ -175,7 +154,7 @@ class ScenarioCenterWidget(BoxLayout):
         self.add_widget(lower)
 
         # # 백엔드 → Grid 자동 업데이트
-        # Clock.schedule_interval(self.update_grid_from_backend, 0.1)
+        Clock.schedule_interval(self.update_grid_from_backend, 0.1)
 
 
 
@@ -185,17 +164,15 @@ class ScenarioCenterWidget(BoxLayout):
         self.bg.size = self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
 
-    # def update_grid_from_backend(self, dt):
-    #     self.grid_view.update_backend_state(
-    #         grid_state=FrameBus.get_grid_state(),
-    #         agent_states=FrameBus.get_agent_states(),
-    #         paths=FrameBus.get_paths(),
-    #         home_positions=FrameBus.get_home_positions(),
-    #     )
+    def update_grid_from_backend(self, dt):
+        self.grid_view.update_backend_state(
+            grid_state=FrameBus.get_grid_state(),
+            agent_states=FrameBus.get_agent_states(),
+            paths=FrameBus.get_paths(),
+            home_positions=FrameBus.get_home_positions(),
+        )
 
-    def select_robot(self, rid):
-        post("select_robot", rid=rid)
-
+    
     def toggle_mode(self, *args):
         self.current_scenario_mode = "Run" if self.current_scenario_mode == "Idle" else "Idle"
         self.btn_mode.text = f"모드: {self.current_scenario_mode}"
