@@ -24,6 +24,8 @@ class FrameBus:
     _headings = {}                    # {id:deg} (⭐ 선택적 - 로봇 방향)
     _scenario_status = "idle"
     _selected_robot = None
+    _robot_ui_state = {}      # 기존
+    _order_history = []       # ⭐ 주문 이력 누적용
 
     # ====================
     # --- Grid (영상) ---
@@ -204,6 +206,37 @@ class FrameBus:
     def get_selected_robot():
         global _selected_robot
         return _selected_robot
+    
+    # ====================
+    # --- Robot UI State ---
+    # ====================
+    
+    @classmethod
+    def set_robot_ui_state(cls, robot_state_dict: dict):
+        with cls._lock:
+            cls._robot_ui_state = robot_state_dict.copy()
+
+    @classmethod
+    def get_robot_ui_state(cls):
+        with cls._lock:
+            return cls._robot_ui_state.copy()
+        
+    @classmethod
+    def add_order_history(cls, record: dict):
+        """
+        record 예시:
+        { "rid": 1, "order_id": 12, "goal": [3,4], "status": "ASSIGNED", "timestamp": 12345678 }
+        """
+        cls._order_history.append(record)
+
+    @classmethod
+    def get_order_history(cls):
+        return cls._order_history.copy()
+
+    @classmethod
+    def clear_order_history(cls):
+        cls._order_history.clear()
+
 
     # ===================
     # UI → Backend 명령큐

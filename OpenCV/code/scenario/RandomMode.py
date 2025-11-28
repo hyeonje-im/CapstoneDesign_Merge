@@ -14,6 +14,7 @@ Cell = Tuple[int, int]
 
 
 class RandomMode:  # inherits BaseMode at runtime in your project
+    name = "RandomMode"
     """
     TestMode와 동일한 구동/콜백 흐름을 유지하면서,
     '목표를 찍는 방식'만 홈↔테이블(장애물) 인접 자유칸 규칙으로 바꾼 모드.
@@ -315,3 +316,63 @@ class RandomMode:  # inherits BaseMode at runtime in your project
                 a.delay = 0
             except Exception:
                 pass
+
+        # =====================================================
+    #  UI로 내보낼 상태 패킷
+    # =====================================================
+    def export_ui_state(self, agents, ctx, runstate):
+        """
+        RandomMode는 주문 개념이 없으므로 num='-' 고정.
+        pos / goal / status 를 UI로 내보낸다.
+        """
+        state = {}
+
+        for a in agents:
+            rid = a.id
+            pos  = tuple(a.start) if a.start else None
+            goal = tuple(a.goal) if a.goal else None
+            status = self.compute_robot_status(rid, a, ctx, runstate)
+
+            state[rid] = {
+                "num": "-",     # 주문 없음
+                "pos": pos,
+                "goal": goal,
+                "status": status,
+            }
+
+        return state
+    
+        # =====================================================
+    #  RandomMode 상태 계산기
+    # =====================================================
+    def compute_robot_status(self, rid, agent, ctx, runstate):
+        rs = runstate.get(rid) or {}
+        s = ctx.get(rid, {})
+
+        executing = rs.get("executing", None)
+        start = agent.start
+        goal  = agent.goal
+
+        # 1) 홈리스 → WAITING (명령을 받지 않음)
+        if s.get("homeless"):
+            return "WAITING"
+
+        # 2) 목표 없음 → IDLE
+        if goal is None:
+            return "IDLE"
+
+        # 3) 목표 도달 → ARRIVED
+        if start and goal and tuple(start) == tuple(goal):
+            return "ARRIVED"
+
+        # 4) 홈→테이블 출발시 delay 세션 → DELAYING
+        if agent.delay and agent.delay > 0:
+            return "DELAYING"
+
+        # 5) 명령 수행 중 → MOVING
+        if executing:
+            return "MOVING"
+
+        # 6) 기본 → MOVING
+        return "MOVING"
+

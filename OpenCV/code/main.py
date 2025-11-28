@@ -65,6 +65,7 @@ ROBOT_HOME_POSITIONS = {
 MODE_FACTORY = {
     "test": lambda: TestMode(),
     "restaurant": lambda: RestaurantMode(
+        manager = scenario,
         home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid),
         order_span_sec=(0, 30),
     ),
@@ -82,7 +83,7 @@ def current_solver() -> str:
 
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
-USE_MQTT = 0 # 0: 비사용, 1: 사용
+USE_MQTT = 1 # 0: 비사용, 1: 사용
 
 if USE_MQTT:
     from OpenCV.code.recieve_message import init_mqtt_client
@@ -839,7 +840,8 @@ def main():
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
         manual.draw_overlay(vis)  # ← 수동 경로 오버레이
-        ui_state = scenario.get_mode_ui_state(drain_new=True)
+        ui_state = FrameBus.get_robot_ui_state()
+
         
         if ui_state:
             show_orders_text_panel(ui_state)

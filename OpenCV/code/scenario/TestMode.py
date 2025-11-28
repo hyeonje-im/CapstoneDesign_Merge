@@ -8,6 +8,7 @@ Cell = Tuple[int, int]
 RobotId = int
 
 class TestMode(BaseMode):
+    name = "TestMode"
     """
     거동 원칙:
     - 초기/유휴 시 목표가 없으면 무작위 목표를 부여(출발/다른 목표/점유와 비겹침)
@@ -171,3 +172,56 @@ class TestMode(BaseMode):
             a.goal = ng if ng is not None else a.start  # 실패하면 대기(= start)
             if ng is not None:
                 goals.add(tuple(ng))
+
+    # =====================================================
+    #  UI Export (ORDER LIST UI 형식 맞추기)
+    # =====================================================
+    def export_ui_state(self, agents, ctx, runstate):
+        """
+        TestMode는 order 개념이 없으므로 order=None으로 넣고
+        pos/goal/status만 채워서 ScenarioManager -> FrameBus -> UI 로 전달한다.
+        """
+        state = {}
+
+        for a in agents:
+            rid = a.id
+
+            pos  = tuple(a.start) if a.start else None
+            goal = tuple(a.goal) if a.goal else None
+
+            status = self.compute_robot_status(rid, a, ctx, runstate)
+
+            state[rid] = {
+                "num": "-",       # 주문 번호 없음
+                "pos": pos,
+                "goal": goal,
+                "status": status,
+            }
+
+        return state
+    
+    # =====================================================
+    #  TestMode 상태 계산 (ScenarioManager와 호환)
+    # =====================================================
+    def compute_robot_status(self, rid, agent, ctx, runstate):
+        rs = runstate.get(rid) or {}
+
+        executing = rs.get("executing", None)
+        start = agent.start
+        goal  = agent.goal
+
+        # 1) 목표 없음 → IDLE
+        if goal is None:
+            return "IDLE"
+
+        # 2) 목표 도달 → ARRIVED
+        if start and goal and tuple(start) == tuple(goal):
+            return "ARRIVED"
+
+        # 3) 명령이 실행 중이면 MOVING
+        if executing:
+            return "MOVING"
+
+        # 4) 기타 → MOVING (실제로는 항상 움직임을 목적)
+        return "MOVING"
+
