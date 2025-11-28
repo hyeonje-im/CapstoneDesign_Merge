@@ -1,4 +1,3 @@
-
 import numpy as np
 from pupil_apriltags import Detector
 import cv2
@@ -7,7 +6,7 @@ import time
 
 class AprilTagDetector:
     def __init__(self, k_getter):
-        self.detector = Detector(families="tag36h11")
+        self.detector = Detector(families="tag36h11",nthreads=4,quad_decimate=1.5,quad_sigma=0.8, refine_edges=1,)
         self.detected_ids = set()  # 현재 감지된 태그 ID들
         self.tag_info = {}         # 태그별 정보 저장
         self.board_tag = None

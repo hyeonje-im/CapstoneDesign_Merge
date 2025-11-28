@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # 2️⃣ 백엔드 로드 (OpenCV)
 # ==========================
 os.environ["SHOW_CV_WINDOWS"] = "1"   # 개발용만 켜두기
-import OpenCV.code.main_merge as backend
+import OpenCV.code.main as backend
 
 # ==========================
 # 3️⃣ Kivy UI 화면 임포트

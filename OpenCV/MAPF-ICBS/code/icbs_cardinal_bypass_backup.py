@@ -2,6 +2,8 @@ import time as timer
 import heapq
 import random
 from single_agent_planner import  a_star, compute_heuristics, get_location, get_sum_of_cost
+from cbs_basic import apply_delay_constraint
+
 import math
 import copy
 import numpy
@@ -214,19 +216,16 @@ def combined_constraints(constraints, new_constraints, updated_constraints=None)
 class ICBS_CB_Solver(object):
     """The high-level search of CBS."""
 
-    def __init__(self, my_map, agents):
+    def __init__(self, my_map, starts, goals):
         """my_map   - list of lists specifying obstacle positions
         starts      - [(x1, y1), (x2, y2), ...] list of start locations
         goals       - [(x1, y1), (x2, y2), ...] list of goal locations
         """
 
         self.my_map = my_map
-        self.agents = agents
-
-        self.starts = [agent.start for agent in agents]
-        self.goals  = [agent.goal  for agent in agents]
-        self.num_of_agents = len(self.goals)
-
+        self.starts = starts
+        self.goals = goals
+        self.num_of_agents = len(goals)
         self.num_of_generated = 0
         self.num_of_expanded = 0
         self.CPU_time = 0
@@ -273,6 +272,10 @@ class ICBS_CB_Solver(object):
                 'constraints': [],
                 'paths': [],
                 'collisions': []}
+        for i in range(self.num_of_agents):
+            if hasattr(self, "delays") and self.delays[i] > 0:
+                apply_delay_constraint(root['constraints'], i, self.starts[i], self.delays[i])
+        
         for i in range(self.num_of_agents):  # Find initial path for each agent
             path = a_star(self.my_map, self.starts[i], self.goals[i], self.heuristics[i],
                           i, root['constraints'])

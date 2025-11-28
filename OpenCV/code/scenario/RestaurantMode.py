@@ -1,7 +1,13 @@
 import random, time
 from typing import Dict, List, Optional, Set, Tuple
+import json
+from pathlib import Path
+
+import os
 
 import numpy as np
+
+import grid
 
 Cell = Tuple[int, int]
 
@@ -31,6 +37,12 @@ class RestaurantMode:
     def __init__(self, *, home_provider=None, order_span_sec=(0, 30)):
         self.home_provider = home_provider
         self.span_min, self.span_max = order_span_sec
+
+        self._cfg_path = Path(__file__).parent / "table_coords.json"
+        self._cfg_mtime: float | None = None
+        self.table_chairs: List[Cell] = []
+
+        self._reload_table_config(force=True)
 
         # 주문 상태
         self.order_new: Optional[Tuple[int, Cell]] = None
@@ -104,36 +116,124 @@ class RestaurantMode:
             if 0 <= rr < H and 0 <= cc < W:
                 yield rr, cc
 
-    def _pick_table_adjacent(self, grid: np.ndarray, forbidden: Set[Cell]) -> Optional[Cell]:
-        """장애물 셀의 4방 인접 자유칸 중, 금지(forbidden)에 없는 칸 하나를 무작위로."""
-        H, W = grid.shape
-        tables_adj = []
-        for r in range(H):
-            for c in range(W):
-                if grid[r, c] == 0:
-                    continue
-                adj = [(rr, cc) for (rr, cc) in self._neighbors4(r, c, H, W) if grid[rr, cc] == 0]
-                if adj:
-                    tables_adj.append(adj)
-        if not tables_adj:
+    # def _pick_table_adjacent(self, grid: np.ndarray, forbidden: Set[Cell]) -> Optional[Cell]:
+    #     """장애물 셀의 4방 인접 자유칸 중, 금지(forbidden)에 없는 칸 하나를 무작위로."""
+    #     H, W = grid.shape
+    #     tables_adj = []
+    #     for r in range(H):
+    #         for c in range(W):
+    #             if grid[r, c] == 0:
+    #                 continue
+    #             adj = [(rr, cc) for (rr, cc) in self._neighbors4(r, c, H, W) if grid[rr, cc] == 0]
+    #             if adj:
+    #                 tables_adj.append(adj)
+    #     if not tables_adj:
+    #         return None
+    #     random.shuffle(tables_adj)
+    #     for adj in tables_adj:
+    #         cand = [p for p in adj if p not in forbidden]
+    #         if cand:
+    #             return random.choice(cand)
+    #     return None
+    # # ↑ 랜덤모드에서 쓰던 “테이블 옆 4칸” 선택 방식을 그대로 사용. :contentReference[oaicite:3]{index=3}
+
+    def _pick_from_table_meta(self, grid: np.ndarray, forbidden: Set[Cell]) -> Optional[Cell]:
+
+        if not self.table_chairs:
             return None
-        random.shuffle(tables_adj)
-        for adj in tables_adj:
-            cand = [p for p in adj if p not in forbidden]
-            if cand:
-                return random.choice(cand)
-        return None
-    # ↑ 랜덤모드에서 쓰던 “테이블 옆 4칸” 선택 방식을 그대로 사용. :contentReference[oaicite:3]{index=3}
+
+        H, W = grid.shape
+        fbd = set(forbidden)
+        taken_dsts = {dst for _, dst in self.order_list} | {dst for _, dst in self.order_start}
+        fbd |= taken_dsts
+
+        # 유효한 후보만 필터링
+        candidates: List[Cell] = []
+        for (r, c) in self.table_chairs:
+            # 범위 밖이면 스킵
+            if not self._in_bounds(r, c, H, W):
+                continue
+            # 통로(0)가 아니면 스킵
+            if grid[r, c] != 0:
+                continue
+            # 이미 금지/사용 중이면 스킵
+            if (r, c) in fbd:
+                continue
+            candidates.append((r, c))
+
+        if not candidates:
+            return None
+
+        import random
+        return random.choice(candidates)
+
+
 
     def _home_of(self, ctx: Dict[int, dict], rid: int) -> Optional[Cell]:
         h = self.ensure_agent_ctx(ctx, rid).get("home")
         return tuple(h) if h else None
+
+    def _dir_vec(self, d: str):
+        # 행(r)↓, 열(c)→ 기준
+        return {"n": (-1,0), "e": (0,1), "s": (1,0), "w": (0,-1)}.get(d.lower(), (0,0))
+
+    def _in_bounds(self, r, c, H, W):
+        return 0 <= r < H and 0 <= c < W
+
+    # def _chairs_for_table(self, *, grid: np.ndarray, table_rc, direction: str, chair_count: int):
+    #     """
+    #     테이블 좌표·방향·의자 수로 '의자 후보 좌표 리스트'를 계산한다.
+    #     규칙:
+    #     - 1개: 테이블에서 방향으로 1칸
+    #     - 2개: (우선) 방향으로 1칸 + 그 좌/우로 1칸 중 가능한 셀
+    #         (예: n이면 (r-1,c) 우선, 그 옆 (r-1,c-1), (r-1,c+1) 시도)
+    #     grid[r,c]==0 이 통로, 1이 장애물.
+    #     """
+    #     H, W = grid.shape
+    #     tr, tc = table_rc
+    #     dr, dc = self._dir_vec(direction)
+
+    #     prim = (tr+dr, tc+dc)
+    #     # 좌/우(옆) 벡터: (dr,dc)를 기준으로 시계·반시계 회전
+    #     left  = (-dc, dr)
+    #     right = (dc, -dr)
+
+    #     candidates = []
+    #     # 1순위: 방향으로 1칸
+    #     if self._in_bounds(*prim, H, W) and grid[prim[0], prim[1]] == 0:
+    #         candidates.append(prim)
+
+    #     # 2개 의자면 좌/우측 한 칸을 추가 후보로 시도
+    #     if chair_count >= 2 and candidates:
+    #         lr, lc = prim[0]+left[0], prim[1]+left[1]
+    #         rr, rc = prim[0]+right[0], prim[1]+right[1]
+    #         if self._in_bounds(lr, lc, H, W) and grid[lr, lc] == 0:
+    #             candidates.append((lr, lc))
+    #         elif self._in_bounds(rr, rc, H, W) and grid[rr, rc] == 0:
+    #             candidates.append((rr, rc))
+
+    #     # chair_count가 1인데 prim이 막혔거나,
+    #     # 2인데 prim이 막혔을 수 있으니, 보정: prim이 막히면 좌/우부터라도 채움
+    #     if not candidates:
+    #         # prim이 막혔으면 좌/우 시도
+    #         lr, lc = tr+left[0], tc+left[1]
+    #         rr, rc = tr+right[0], tc+right[1]
+    #         for cand in [(lr,lc), (rr,rc)]:
+    #             if self._in_bounds(*cand, H, W) and grid[cand[0], cand[1]] == 0:
+    #                 candidates.append(cand)
+    #                 if chair_count == 1:
+    #                     break
+
+    #     # chair_count 초과로 뽑히지 않도록 제한
+    #     return candidates[:chair_count]
 
     # ------------------------------ Ticking ------------------------------
     def tick(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
         """주문 생성, HOME 상태 유지, 필요 시 CBS 트리거."""
         replan = False
         now = time.time()
+
+        self._reload_table_config(force=False)
 
         # 1) 신규 주문 생성 타이밍이면 한 개 만든다 (UI: order_new → order_list 뒤에 append 후 휘발)
         if now >= self._next_order_at:
@@ -145,7 +245,7 @@ class RestaurantMode:
             homes  = {tuple(self._home_of(ctx, a.id)) for a in agents if self._home_of(ctx, a.id)}
             forbidden = set(starts) | set(goals) | set(occ) | set(homes)
             taken_dsts = {dst for _, dst in self.order_list} | {dst for _, dst in self.order_start}
-            dst = self._pick_table_adjacent(grid, forbidden | taken_dsts)
+            dst = self._pick_from_table_meta(grid, forbidden | taken_dsts)
             # 대상 로봇은 일단 무작위(보이는 로봇 중), 로봇별 최대 2개 제한
             visible = [a.id for a in agents if a.start]
             random.shuffle(visible)
@@ -355,8 +455,7 @@ class RestaurantMode:
         homes  = {tuple(self._home_of(ctx, a.id)) for a in agents if self._home_of(ctx, a.id)}
         occ    = self.occupied_from_tags(tag_info)
         taken  = {dst for _, dst in self.order_list} | {dst for _, dst in self.order_start}
-        forbidden_base = set(starts) | set(goals) | set(occ) | set(homes) | set(taken)
-
+        forbidden_base = set(starts) | set(goals) | set(occ) | set(homes)
         # 보이는(=start가 있는) 로봇에 대해 1개씩
         visible_ids = [a.id for a in agents if a.start]
         for rid in visible_ids:
@@ -365,8 +464,40 @@ class RestaurantMode:
                 continue
             # 각 rid마다 목적지 선정 시, 이미 선택된 목적지도 추가로 금지
             forbidden = set(forbidden_base) | {dst for _, dst in self.order_list}
-            dst = self._pick_table_adjacent(grid, forbidden)
+            dst = self._pick_from_table_meta(grid, forbidden | taken)
             if dst is None:
                 # 공간 부족하면 스킵 (다른 로봇은 계속 시도)
                 continue
             self.order_list.append((rid, dst))
+
+    def _load_table_chairs_from_file(self) -> List[Cell]:
+        try:
+            with self._cfg_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            chairs = [tuple(x) for x in data.get("chairs", [])]
+            return chairs
+        except FileNotFoundError:
+            print(f"[RestaurantMode] WARNING: table_coords.json not found at {self._cfg_path}")
+            return []
+        except Exception as e:
+            print(f"[RestaurantMode] ERROR loading table_coords.json: {e}")
+            return []
+
+    def _reload_table_config(self, force: bool = False):
+        """JSON 파일이 바뀌었으면 self.table_chairs 갱신."""
+        try:
+            mtime = os.path.getmtime(self._cfg_path)
+        except OSError:
+            # 파일이 없거나 접근 불가
+            if force:
+                self.table_chairs = []
+                self._cfg_mtime = None
+            return
+
+        if not force and self._cfg_mtime is not None and mtime <= self._cfg_mtime:
+            return  # 변경 없음
+
+        chairs = self._load_table_chairs_from_file()
+        self.table_chairs = chairs
+        self._cfg_mtime = mtime
+        print(f"[RestaurantMode] table_coords.json reloaded, {len(chairs)} chairs")

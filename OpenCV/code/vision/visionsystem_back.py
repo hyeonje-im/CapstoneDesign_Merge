@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import math
@@ -5,11 +6,10 @@ from typing import Optional, Tuple, Dict
 from types import SimpleNamespace
 
 
-from OpenCV.code.vision.apriltag import AprilTagDetector
-from OpenCV.code.config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
-from OpenCV.code.vision.board import BoardDetectionResult, BoardDetector
-from OpenCV.code.vision.obstacle import ObstacleDetector
-from OpenCV.code.ui_bridge import FrameBus
+from vision.apriltag import AprilTagDetector
+from config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
+from vision.board import BoardDetectionResult, BoardDetector
+from vision.obstacle import ObstacleDetector
 
 class VisionSystem:
     def __init__(self, undistorter, visualize=True):
@@ -45,6 +45,7 @@ class VisionSystem:
         self.proximity_threshold_cm = critical_dist        # 임계 거리(색상 기준)
         self.exclude_ids_for_distance = {NORTH_TAG_ID}
         self.frame_margin_ratio = 0.04
+        self.obstacle_locked_once = False
     # =====수동 ROI 선택===== 
     
     def start_roi_selection(self):
@@ -140,13 +141,13 @@ class VisionSystem:
         
         # 보드가 lock 상태이고 결과가 있을 때
         if self.board.is_locked and self.board_result is not None:
+            if not self.obstacle_locked_once:
             # 1) 장애물 갱신(기존 유지)
-            occ = self.obstacle_detector.update_from_board(self.board_result)
-            if occ is not None:
-                self._last_obstacle_grid = (occ.astype('uint8'))
-                self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
-                FrameBus.set_grid_state(self._last_obstacle_grid)
-
+                occ = self.obstacle_detector.update_from_board(self.board_result)
+                if occ is not None:
+                    self._last_obstacle_grid = (occ.astype('uint8'))
+                    self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
+                self.obstacle_locked_once = True
             # 2) src/dst 준비
             #   - src: 보드 4코너(원본 픽셀 좌표)
             #   - dst: (0,0)~(W-1,H-1) 사각형(여백 포함)
@@ -193,25 +194,6 @@ class VisionSystem:
             # 5) 프리뷰 사이즈로 리사이즈 + 표시
             preview = cv2.resize(warped_color, (min(new_w, 900), min(new_h, 900)))
             cv2.imshow("Warped Board Preview", preview)
-            #============================
-            #============================
-            # 워프영상을 FrameBus에 전달
-            FrameBus.set_warped(warped_color)
-            #============================
-            #============================
-        # === 로봇 heading 업데이트 ===
-        headings = {}
-        for tag_id, data in tag_info.items():
-            if data.get("status") != "On":
-                continue
-            # VisionSystem에서 계산된 방향 값
-            heading = data.get("yaw_front_to_north_deg")
-            if heading is not None:
-                headings[tag_id] = heading
-
-        FrameBus.set_headings(headings)
-
-
 
 
         return {
@@ -268,6 +250,7 @@ class VisionSystem:
     def reset_board(self):
         self.board.reset()
         self.last_valid_result = None
+        self.obstacle_locked_once = False
 
     def toggle_visualization(self):
         self.visualize = not self.visualize

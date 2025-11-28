@@ -4,7 +4,13 @@ import random
 # from single_agent_planner import compute_heuristics, a_star, get_location
 # from multi_agent_planner import ll_solver, get_sum_of_cost, compute_heuristics, get_location
 
-from a_star_class import A_Star, get_sum_of_cost, compute_heuristics, get_location
+COST_WAIT = 1.0
+COST_STRAIGHT = 1.2
+COST_TURN = 1.6
+
+PEN_YIELD = 0.8
+
+from a_star_class_add1 import A_Star, compute_heuristics, get_location
 
 import copy
 
@@ -22,12 +28,68 @@ import numpy
 #       PEP 505 - None-aware operators: https://www.python.org/dev/peps/pep-0505/#syntax-and-semantics
 '''
 
+def _safe_get(path, t):
+    return path[t] if t < len(path) else path[-1]
+
+def _step_type(prev_prev, prev, nxt):
+    if nxt == prev:
+        return "wait"
+    if prev_prev is None or prev_prev == prev:
+        return "straight"
+    v1 = (prev[0]-prev_prev[0], prev[1]-prev_prev[1])
+    v2 = (nxt[0]-prev[0],      nxt[1]-prev[1])
+    return "straight" if v1 == v2 else "turn"
+
+def build_yield_prev_table(paths, excluded_agents):
+    table = {}
+    N = len(paths)
+    maxT = max((len(p) for p in paths), default=0)
+    for t in range(1, maxT+1):
+        cells = set()
+        for i in range(N):
+            if i in excluded_agents or not paths[i]:
+                continue
+            prev_i = _safe_get(paths[i], t-1)
+            cells.add(prev_i)
+        table[t] = cells
+    return table
+
+
+def weighted_sum_cost(paths):
+    total = 0.0
+    N = len(paths)
+    maxT = max((len(p) for p in paths), default=0)
+    for i, path in enumerate(paths):
+        if not path: 
+            continue
+        for t in range(1, len(path)):
+            prev_prev = path[t-2] if t-2 >= 0 else None
+            prev = path[t-1]
+            curr = path[t]
+
+            st = _step_type(prev_prev, prev, curr)
+            if st == "wait":
+                total += COST_WAIT
+            elif st == "straight":
+                total += COST_STRAIGHT
+            else:
+                total += COST_TURN
+
+            for j in range(N):
+                if j == i or not paths[j]:
+                    continue
+                prev_j = _safe_get(paths[j], t-1)
+                if curr == prev_j:
+                    total += PEN_YIELD
+                    break
+    return total
+
 def generate_child(constraints, paths, agent_collisions, ma_list):
 
     assert isinstance(ma_list , list)
 
     collisions = detect_collisions(paths, ma_list)
-    cost = get_sum_of_cost(paths)
+    cost = weighted_sum_cost(paths)
     child_node = {
         'cost':cost,
         'constraints': copy.deepcopy(constraints),
@@ -303,11 +365,11 @@ def combined_constraints(constraints, new_constraints, updated_constraints=None)
     return updated_constraints
 
 
-def bypass_found(curr_cost, new_cost, curr_collisions_num, new_collisions_num):
-    if curr_cost == new_cost \
-        and (new_collisions_num < curr_collisions_num):
+def bypass_found(curr_cost, new_cost, curr_collisions_num, new_collisions_num, eps=1e-9):
+    if abs(curr_cost - new_cost) < eps and (new_collisions_num < curr_collisions_num):
         return True
     return False
+
 
 def should_merge(collision, p, N=0):
     a1 = collision['a1']
@@ -334,19 +396,16 @@ def should_merge(collision, p, N=0):
 class ICBS_Solver(object):
     """The high-level search of CBS."""
 
-    def __init__(self, my_map, agents):
+    def __init__(self, my_map, starts, goals):
         """my_map   - list of lists specifying obstacle positions
         starts      - [(x1, y1), (x2, y2), ...] list of start locations
         goals       - [(x1, y1), (x2, y2), ...] list of goal locations
         """
 
         self.my_map = my_map
-        self.agents = agents
-
-        self.starts = [agent.start for agent in agents]
-        self.goals = [agent.goal for agent in agents]
-        self.num_of_agents = len(self.goals)
-
+        self.starts = starts
+        self.goals = goals
+        self.num_of_agents = len(goals)
         self.num_of_generated = 0
         self.num_of_expanded = 0
         self.CPU_time = 0
@@ -384,12 +443,15 @@ class ICBS_Solver(object):
 
 
         ma1 = collision['ma1'] #agent a1
+        yield_prev1 = build_yield_prev_table(p['paths'], excluded_agents=ma1)
 
         # print('Sending ma1 in collision {} to A* '.format(ma1))
 
         assert temp_constraints[0]['meta_agent'] == ma1
         path1_constraints = combined_constraints(p['constraints'], temp_constraints[0])
-        astar_ma1 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma1),path1_constraints)
+        astar_ma1 = AStar(self.my_map,self.starts,self.goals,self.heuristics,
+                  list(ma1), path1_constraints,
+                  yield_prev_table=yield_prev1)
         alt_paths1 = astar_ma1.find_paths()
 
         # get current paths of meta-agent
@@ -406,11 +468,11 @@ class ICBS_Solver(object):
         # print(alt_paths1)
 
         # get costs for the meta agent
-        curr_cost = get_sum_of_cost(curr_paths)
+        curr_cost = weighted_sum_cost(curr_paths)
         
         alt_cost = 0 # write inline if later
         if alt_paths1:
-            alt_cost = get_sum_of_cost(alt_paths1)
+            alt_cost = weighted_sum_cost(alt_paths1)
 
         # print('\t oldcost:{} newcost:{}'.format(curr_cost, alt_cost))
 
@@ -421,12 +483,12 @@ class ICBS_Solver(object):
             
             
         ma2 = collision['ma2'] #agent a2
-
+        yield_prev2 = build_yield_prev_table(p['paths'], excluded_agents=ma2)
         # print('Sending ma2 in collision {} to A* '.format(ma2))
 
         assert temp_constraints[1]['meta_agent'] == ma2
         path2_constraints = combined_constraints(p['constraints'], temp_constraints[1])
-        astar_ma2 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma2),path2_constraints)
+        astar_ma2 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma2),path2_constraints,yield_prev_table=yield_prev2)
         alt_paths2 = astar_ma2.find_paths()
 
         # if not alt_path2 or bigger:
@@ -441,11 +503,11 @@ class ICBS_Solver(object):
         # print(alt_paths2)
 
         # get costs for the meta agent
-        curr_cost = get_sum_of_cost(curr_paths)
+        curr_cost = weighted_sum_cost(curr_paths)
         
         alt_cost = 0 # write inline if later
         if alt_paths2:
-            alt_cost = get_sum_of_cost(alt_paths2)
+            alt_cost = weighted_sum_cost(alt_paths2)
 
         # print('\t oldcost:{} newcost:{}'.format(curr_cost, alt_cost))
 
@@ -529,7 +591,7 @@ class ICBS_Solver(object):
 
 
 
-        root['cost'] = get_sum_of_cost(root['paths'])
+        root['cost'] = weighted_sum_cost(root['paths'])
         root['ma_collisions'] = detect_collisions(root['paths'], root['ma_list'])
         root['agent_collisions'] = numpy.zeros((self.num_of_agents, self.num_of_agents))
         self.push_node(root)
@@ -627,6 +689,7 @@ class ICBS_Solver(object):
                 assert isinstance(q['ma_list'] , list)
 
                 ma = constraint['meta_agent']
+                yield_prev = build_yield_prev_table(q['paths'], excluded_agents=ma)
 
                 print('\nSending meta_agent {} of constrained agent {} to A* '.format(ma, constraint['agent']))
                 print('\twith constraints ', q['constraints'])
@@ -634,7 +697,9 @@ class ICBS_Solver(object):
                 for a in ma:
                     print (q['paths'][a])
 
-                astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma),q['constraints'])
+                astar = AStar(self.my_map, self.starts, self.goals,
+                            self.heuristics, list(ma), q['constraints'],
+                            yield_prev_table=yield_prev)
                 paths = astar.find_paths()
 
                 if paths is not None:
@@ -665,7 +730,8 @@ class ICBS_Solver(object):
 
 
                             v_ma_list = list(v_ma) # should use same list for all uses
-                            astar_v_ma = AStar(self.my_map,self.starts,self.goals,self.heuristics,v_ma_list,q['constraints'])
+                            yield_prev_v = build_yield_prev_table(q['paths'], excluded_agents=v_ma)
+                            astar_v_ma = AStar(self.my_map,self.starts,self.goals,self.heuristics,v_ma_list,q['constraints'], yield_prev_table=yield_prev_v)
                             paths_v_ma = astar_v_ma.find_paths()
 
 
@@ -703,7 +769,7 @@ class ICBS_Solver(object):
 
                     assert chosen_collision not in q['ma_collisions']
 
-                    q['cost'] = get_sum_of_cost(q['paths'])
+                    q['cost'] = weighted_sum_cost(q['paths'])
 
 
                     # assert that bypass is not possible if cardinal
@@ -744,10 +810,9 @@ class ICBS_Solver(object):
 
                 for a in meta_agent:
                     print (p['paths'][a])
-
-
+                yield_prev = build_yield_prev_table(p['paths'], excluded_agents=meta_agent)
                 # Update paths
-                ma_astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(meta_agent), updated_constraints)
+                ma_astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(meta_agent), updated_constraints, yield_prev)
                 ma_paths = ma_astar.find_paths()
 
 
@@ -804,7 +869,7 @@ class ICBS_Solver(object):
         print("\n Found a solution! \n")
         CPU_time = timer.time() - self.start_time
         print("CPU time (s):    {:.2f}".format(CPU_time))
-        print("Sum of costs:    {}".format(get_sum_of_cost(node['paths'])))
+        print("Sum of costs:    {}".format(weighted_sum_cost(node['paths'])))
         
         # file = "nodes-generated.csv"
         # result_file = open(file, "a", buffering=1)
@@ -817,3 +882,189 @@ class ICBS_Solver(object):
         print("Solution:")
         for i in range(len(node['paths'])):
             print("agent", i, ": ", node['paths'][i])
+
+class InICBS:
+    """
+    D-확장 루프를 내부에서 도는 Incremental ICBS 래퍼.
+
+    외부에서는:
+      - dynamic_starts, dynamic_goals : 이번에 다시 짤 로봇들
+      - other_paths : 나머지 로봇들의 남은 경로들
+    만 넘겨주면 되고, 내부에서 D 확장 + 여러 번 ICBS 호출을 관리한다.
+    """
+
+    def __init__(self, my_map, dynamic_starts, dynamic_goals, other_paths):
+        """
+        my_map          : 기존 CBS와 동일한 맵 표현
+        dynamic_starts  : [(...), ...]   # 이번에 다시 짤 로봇들의 시작 위치
+        dynamic_goals   : [(...), ...]   # 위 로봇들의 목표 위치
+        other_paths     : [path_j, ...]  # 나머지 로봇들의 '남은 경로'
+
+        path 포맷은 기존 ICBS/A*에서 쓰는 것과 동일하다고 가정.
+        """
+        assert len(dynamic_starts) == len(dynamic_goals)
+
+        self.my_map = my_map
+        self.dynamic_starts = list(dynamic_starts)
+        self.dynamic_goals = list(dynamic_goals)
+        self.other_paths = list(other_paths)
+
+        # 전체 에이전트 개수 (global index 0..N_total-1 를 이 solve 안에서만 사용)
+        self.num_dynamic_initial = len(self.dynamic_starts)
+        self.num_fixed_initial = len(self.other_paths)
+        self.num_total = self.num_dynamic_initial + self.num_fixed_initial
+
+        # 내부에서 쓸 global index:
+        #  - 0 .. D0-1           : 처음부터 dynamic인 로봇
+        #  - D0 .. D0+R0-1       : 처음에는 fixed였던 로봇
+        self.dynamic_ids = set(range(self.num_dynamic_initial))
+        self.fixed_ids = set(range(self.num_dynamic_initial, self.num_total))
+
+        # fixed 에이전트들도 나중에 dynamic으로 편입될 수 있으니,
+        # 미리 start/goal을 추출해 둔다.
+        # start = 남은 경로의 첫 위치, goal = 남은 경로의 마지막 위치
+        self.fixed_starts = {}
+        self.fixed_goals = {}
+        for idx, path in enumerate(self.other_paths):
+            global_id = self.num_dynamic_initial + idx
+            if not path:
+                # 경로가 비어있는 경우는 거의 없다고 가정하지만, 방어적으로 처리
+                self.fixed_starts[global_id] = None
+                self.fixed_goals[global_id] = None
+            else:
+                self.fixed_starts[global_id] = path[0]
+                self.fixed_goals[global_id] = path[-1]
+
+        # fixed_paths: global_id -> path
+        self.fixed_paths = {}
+        for idx, path in enumerate(self.other_paths):
+            global_id = self.num_dynamic_initial + idx
+            self.fixed_paths[global_id] = path
+
+        # 통계용
+        self.total_nodes_generated = 0
+        self.total_nodes_expanded = 0
+
+    def _build_starts_goals_for_D(self):
+        """
+        현재 dynamic_ids 집합 D에 대해,
+        ICBS_Solver에 넘길 starts/goals 리스트와
+        local index -> global index 매핑을 만든다.
+        """
+        starts_D = []
+        goals_D = []
+        local_to_global = []
+
+        # deterministic하게 하기 위해 sorted 사용 (원하면 다른 순서도 가능)
+        for g_id in sorted(self.dynamic_ids):
+            local_to_global.append(g_id)
+            if g_id < self.num_dynamic_initial:
+                # 처음부터 dynamic이었던 에이전트
+                starts_D.append(self.dynamic_starts[g_id])
+                goals_D.append(self.dynamic_goals[g_id])
+            else:
+                # 원래 fixed였다가 dynamic으로 편입된 에이전트
+                s = self.fixed_starts.get(g_id)
+                g = self.fixed_goals.get(g_id)
+                assert s is not None and g is not None, \
+                    f"fixed agent {g_id} has no start/goal"
+                starts_D.append(s)
+                goals_D.append(g)
+
+        return starts_D, goals_D, local_to_global
+
+    def _merge_candidate_paths(self, D_paths_local, local_to_global):
+        """
+        D에 대한 새 경로(D_paths_local)를
+        기존 fixed_paths와 합쳐서 full candidate plan을 만든다.
+        반환값: cand_paths (길이 = num_total, index=global_id 기준)
+        """
+        # 1) local -> global 매핑을 dict로 바꿈
+        D_paths_global = {}
+        for li, gi in enumerate(local_to_global):
+            D_paths_global[gi] = D_paths_local[li]
+
+        # 2) 전체 candidate plan 생성
+        cand_paths = [None] * self.num_total
+        for g_id in range(self.num_total):
+            if g_id in D_paths_global:
+                cand_paths[g_id] = D_paths_global[g_id]
+            else:
+                # 아직 fixed인 애들
+                cand_paths[g_id] = self.fixed_paths[g_id]
+
+        return cand_paths
+
+    def _find_colliding_fixed_agents(self, cand_paths):
+        """
+        cand_paths에서 dynamic vs fixed 충돌을 검사하고,
+        새로 dynamic으로 편입되어야 할 fixed 에이전트 global_id 집합을 반환한다.
+        """
+        # meta-agent는 전부 singleton으로 둔다.
+        ma_list = [[i] for i in range(self.num_total)]
+
+        collisions = detect_collisions(cand_paths, ma_list)
+        colliding_fixed = set()
+
+        for col in collisions:
+            a1 = col['a1']
+            a2 = col['a2']
+            inD1 = a1 in self.dynamic_ids
+            inD2 = a2 in self.dynamic_ids
+
+            # D 내부 충돌은 ICBS가 해결해 줬다고 가정 (collision-free)
+            # 우리가 관심 있는 건 D와 R 사이의 충돌만.
+            if inD1 and not inD2:
+                colliding_fixed.add(a2)
+            elif inD2 and not inD1:
+                colliding_fixed.add(a1)
+
+        return colliding_fixed
+
+    def solve(self, disjoint=False):
+        """
+        외부에서 한 번만 호출되는 엔트리포인트.
+
+        - 내부에서 D 확장 루프를 돌며,
+        - 최종적으로 dynamic 초기 집합(0..num_dynamic_initial-1)에 대한 새 경로 리스트를 리턴한다.
+
+        return:
+            paths_dynamic, total_nodes_generated, total_nodes_expanded
+        """
+        # D 확장 루프
+        while True:
+            # 1) 현재 D에 대해 starts/goals/local_to_global 구성
+            starts_D, goals_D, local_to_global = self._build_starts_goals_for_D()
+
+            # 2) 부분 집합 D에 대해 ICBS 한 번 실행
+            icbs = ICBS_Solver(self.my_map, starts_D, goals_D)
+            result = icbs.find_solution(disjoint)
+
+            if result is None:
+                # 해를 못 찾은 경우 - 정책에 따라 처리
+                return None, self.total_nodes_generated, self.total_nodes_expanded
+
+            D_paths_local, nodes_gen, nodes_exp = result
+    
+            # 통계 누적
+            self.total_nodes_generated += nodes_gen
+            self.total_nodes_expanded += nodes_exp
+
+            # 3) candidate full plan 구성
+            cand_paths = self._merge_candidate_paths(D_paths_local, local_to_global)
+
+            # 4) dynamic vs fixed 충돌 검사
+            colliding_fixed = self._find_colliding_fixed_agents(cand_paths)
+
+            if not colliding_fixed:
+                return cand_paths, self.total_nodes_generated, self.total_nodes_expanded
+
+            # 5) 새로 충돌한 fixed 에이전트를 D로 편입
+            self.dynamic_ids |= colliding_fixed
+            self.fixed_ids -= colliding_fixed
+
+            # 방어적: 모든 에이전트가 dynamic이 되었는데도 충돌이 남는다 → ICBS가 실패한 상태
+            if len(self.dynamic_ids) == self.num_total and len(colliding_fixed) > 0:
+                # full ICBS로도 해결이 안 되는 경우니 실패로 본다.
+                # (필요하면 여기서 다시 한 번 full ICBS를 직접 돌리는 것도 가능)
+                return None, self.total_nodes_generated, self.total_nodes_expanded

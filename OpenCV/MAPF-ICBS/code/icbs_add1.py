@@ -4,7 +4,13 @@ import random
 # from single_agent_planner import compute_heuristics, a_star, get_location
 # from multi_agent_planner import ll_solver, get_sum_of_cost, compute_heuristics, get_location
 
-from a_star_class import A_Star, get_sum_of_cost, compute_heuristics, get_location
+COST_WAIT = 1.0
+COST_STRAIGHT = 1.2
+COST_TURN = 1.6
+
+PEN_YIELD = 0.8
+
+from a_star_class_add1 import A_Star, compute_heuristics, get_location
 
 import copy
 
@@ -22,12 +28,68 @@ import numpy
 #       PEP 505 - None-aware operators: https://www.python.org/dev/peps/pep-0505/#syntax-and-semantics
 '''
 
+def _safe_get(path, t):
+    return path[t] if t < len(path) else path[-1]
+
+def _step_type(prev_prev, prev, nxt):
+    if nxt == prev:
+        return "wait"
+    if prev_prev is None or prev_prev == prev:
+        return "straight"
+    v1 = (prev[0]-prev_prev[0], prev[1]-prev_prev[1])
+    v2 = (nxt[0]-prev[0],      nxt[1]-prev[1])
+    return "straight" if v1 == v2 else "turn"
+
+def build_yield_prev_table(paths, excluded_agents):
+    table = {}
+    N = len(paths)
+    maxT = max((len(p) for p in paths), default=0)
+    for t in range(1, maxT+1):
+        cells = set()
+        for i in range(N):
+            if i in excluded_agents or not paths[i]:
+                continue
+            prev_i = _safe_get(paths[i], t-1)
+            cells.add(prev_i)
+        table[t] = cells
+    return table
+
+
+def weighted_sum_cost(paths):
+    total = 0.0
+    N = len(paths)
+    maxT = max((len(p) for p in paths), default=0)
+    for i, path in enumerate(paths):
+        if not path: 
+            continue
+        for t in range(1, len(path)):
+            prev_prev = path[t-2] if t-2 >= 0 else None
+            prev = path[t-1]
+            curr = path[t]
+
+            st = _step_type(prev_prev, prev, curr)
+            if st == "wait":
+                total += COST_WAIT
+            elif st == "straight":
+                total += COST_STRAIGHT
+            else:
+                total += COST_TURN
+
+            for j in range(N):
+                if j == i or not paths[j]:
+                    continue
+                prev_j = _safe_get(paths[j], t-1)
+                if curr == prev_j:
+                    total += PEN_YIELD
+                    break
+    return total
+
 def generate_child(constraints, paths, agent_collisions, ma_list):
 
     assert isinstance(ma_list , list)
 
     collisions = detect_collisions(paths, ma_list)
-    cost = get_sum_of_cost(paths)
+    cost = weighted_sum_cost(paths)
     child_node = {
         'cost':cost,
         'constraints': copy.deepcopy(constraints),
@@ -303,11 +365,11 @@ def combined_constraints(constraints, new_constraints, updated_constraints=None)
     return updated_constraints
 
 
-def bypass_found(curr_cost, new_cost, curr_collisions_num, new_collisions_num):
-    if curr_cost == new_cost \
-        and (new_collisions_num < curr_collisions_num):
+def bypass_found(curr_cost, new_cost, curr_collisions_num, new_collisions_num, eps=1e-9):
+    if abs(curr_cost - new_cost) < eps and (new_collisions_num < curr_collisions_num):
         return True
     return False
+
 
 def should_merge(collision, p, N=0):
     a1 = collision['a1']
@@ -331,7 +393,7 @@ def should_merge(collision, p, N=0):
     return False
 
 
-class ICBS_Solver(object):
+class ICBS_CC_Solver(object):
     """The high-level search of CBS."""
 
     def __init__(self, my_map, agents):
@@ -344,7 +406,7 @@ class ICBS_Solver(object):
         self.agents = agents
 
         self.starts = [agent.start for agent in agents]
-        self.goals = [agent.goal for agent in agents]
+        self.goals  = [agent.goal  for agent in agents]
         self.num_of_agents = len(self.goals)
 
         self.num_of_generated = 0
@@ -384,12 +446,15 @@ class ICBS_Solver(object):
 
 
         ma1 = collision['ma1'] #agent a1
+        yield_prev1 = build_yield_prev_table(p['paths'], excluded_agents=ma1)
 
         # print('Sending ma1 in collision {} to A* '.format(ma1))
 
         assert temp_constraints[0]['meta_agent'] == ma1
         path1_constraints = combined_constraints(p['constraints'], temp_constraints[0])
-        astar_ma1 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma1),path1_constraints)
+        astar_ma1 = AStar(self.my_map,self.starts,self.goals,self.heuristics,
+                  list(ma1), path1_constraints,
+                  yield_prev_table=yield_prev1)
         alt_paths1 = astar_ma1.find_paths()
 
         # get current paths of meta-agent
@@ -406,11 +471,11 @@ class ICBS_Solver(object):
         # print(alt_paths1)
 
         # get costs for the meta agent
-        curr_cost = get_sum_of_cost(curr_paths)
+        curr_cost = weighted_sum_cost(curr_paths)
         
         alt_cost = 0 # write inline if later
         if alt_paths1:
-            alt_cost = get_sum_of_cost(alt_paths1)
+            alt_cost = weighted_sum_cost(alt_paths1)
 
         # print('\t oldcost:{} newcost:{}'.format(curr_cost, alt_cost))
 
@@ -421,12 +486,12 @@ class ICBS_Solver(object):
             
             
         ma2 = collision['ma2'] #agent a2
-
+        yield_prev2 = build_yield_prev_table(p['paths'], excluded_agents=ma2)
         # print('Sending ma2 in collision {} to A* '.format(ma2))
 
         assert temp_constraints[1]['meta_agent'] == ma2
         path2_constraints = combined_constraints(p['constraints'], temp_constraints[1])
-        astar_ma2 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma2),path2_constraints)
+        astar_ma2 = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma2),path2_constraints,yield_prev_table=yield_prev2)
         alt_paths2 = astar_ma2.find_paths()
 
         # if not alt_path2 or bigger:
@@ -441,11 +506,11 @@ class ICBS_Solver(object):
         # print(alt_paths2)
 
         # get costs for the meta agent
-        curr_cost = get_sum_of_cost(curr_paths)
+        curr_cost = weighted_sum_cost(curr_paths)
         
         alt_cost = 0 # write inline if later
         if alt_paths2:
-            alt_cost = get_sum_of_cost(alt_paths2)
+            alt_cost = weighted_sum_cost(alt_paths2)
 
         # print('\t oldcost:{} newcost:{}'.format(curr_cost, alt_cost))
 
@@ -529,7 +594,7 @@ class ICBS_Solver(object):
 
 
 
-        root['cost'] = get_sum_of_cost(root['paths'])
+        root['cost'] = weighted_sum_cost(root['paths'])
         root['ma_collisions'] = detect_collisions(root['paths'], root['ma_list'])
         root['agent_collisions'] = numpy.zeros((self.num_of_agents, self.num_of_agents))
         self.push_node(root)
@@ -627,6 +692,7 @@ class ICBS_Solver(object):
                 assert isinstance(q['ma_list'] , list)
 
                 ma = constraint['meta_agent']
+                yield_prev = build_yield_prev_table(q['paths'], excluded_agents=ma)
 
                 print('\nSending meta_agent {} of constrained agent {} to A* '.format(ma, constraint['agent']))
                 print('\twith constraints ', q['constraints'])
@@ -634,7 +700,9 @@ class ICBS_Solver(object):
                 for a in ma:
                     print (q['paths'][a])
 
-                astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(ma),q['constraints'])
+                astar = AStar(self.my_map, self.starts, self.goals,
+                            self.heuristics, list(ma), q['constraints'],
+                            yield_prev_table=yield_prev)
                 paths = astar.find_paths()
 
                 if paths is not None:
@@ -665,7 +733,8 @@ class ICBS_Solver(object):
 
 
                             v_ma_list = list(v_ma) # should use same list for all uses
-                            astar_v_ma = AStar(self.my_map,self.starts,self.goals,self.heuristics,v_ma_list,q['constraints'])
+                            yield_prev_v = build_yield_prev_table(q['paths'], excluded_agents=v_ma)
+                            astar_v_ma = AStar(self.my_map,self.starts,self.goals,self.heuristics,v_ma_list,q['constraints'], yield_prev_table=yield_prev_v)
                             paths_v_ma = astar_v_ma.find_paths()
 
 
@@ -703,7 +772,7 @@ class ICBS_Solver(object):
 
                     assert chosen_collision not in q['ma_collisions']
 
-                    q['cost'] = get_sum_of_cost(q['paths'])
+                    q['cost'] = weighted_sum_cost(q['paths'])
 
 
                     # assert that bypass is not possible if cardinal
@@ -744,10 +813,9 @@ class ICBS_Solver(object):
 
                 for a in meta_agent:
                     print (p['paths'][a])
-
-
+                yield_prev = build_yield_prev_table(p['paths'], excluded_agents=meta_agent)
                 # Update paths
-                ma_astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(meta_agent), updated_constraints)
+                ma_astar = AStar(self.my_map,self.starts, self.goals,self.heuristics,list(meta_agent), updated_constraints, yield_prev)
                 ma_paths = ma_astar.find_paths()
 
 
@@ -804,7 +872,7 @@ class ICBS_Solver(object):
         print("\n Found a solution! \n")
         CPU_time = timer.time() - self.start_time
         print("CPU time (s):    {:.2f}".format(CPU_time))
-        print("Sum of costs:    {}".format(get_sum_of_cost(node['paths'])))
+        print("Sum of costs:    {}".format(weighted_sum_cost(node['paths'])))
         
         # file = "nodes-generated.csv"
         # result_file = open(file, "a", buffering=1)

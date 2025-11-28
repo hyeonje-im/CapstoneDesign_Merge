@@ -161,3 +161,57 @@ class KRoundedButton(ButtonBehavior, BoxLayout):
         with self.canvas.before:
             Color(*self.normal_color)
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
+
+
+class KToggleRoundedButton(ButtonBehavior, BoxLayout):
+    def __init__(self, text, group="default", height=30, width=100, radius=10,font_size = 13, **kwargs):
+        super().__init__(**kwargs)
+
+        self.height = height
+        self.width = width
+        self.text = text
+        self.group = group
+        self.radius = [radius, radius, radius, radius]
+
+        # 기본/눌림 색상
+        self.normal_color = (0.80, 0.84, 0.90, 1)   # #CCD6E5
+        self.down_color   = (0.65, 0.73, 0.85, 1)   # 더 진한 강조색
+
+        # 상태: normal 또는 down
+        self.state = "normal"
+
+        # 배경(라운딩)
+        with self.canvas.before:
+            Color(*self.normal_color)
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
+
+        self.bind(pos=self._update_graphics, size=self._update_graphics)
+
+        # 텍스트
+        self.label = KLabel(text=text, font_size=font_size, color=(0, 0, 0, 1))
+        self.add_widget(self.label)
+
+        # 버튼을 등록할 그룹
+        if not hasattr(KToggleRoundedButton, "_groups"):
+            KToggleRoundedButton._groups = {}
+        KToggleRoundedButton._groups.setdefault(group, []).append(self)
+
+    def _update_graphics(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+
+    def on_press(self):
+        # 그룹의 다른 버튼들 normal 로 전환
+        for btn in KToggleRoundedButton._groups[self.group]:
+            if btn is not self:
+                btn.set_state("normal")
+        self.set_state("down")
+
+    def set_state(self, state):
+        self.state = state
+        with self.canvas.before:
+            if state == "down":
+                Color(*self.down_color)
+            else:
+                Color(*self.normal_color)
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)

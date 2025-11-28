@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple, Set, Optional
 import numpy as np
 from OpenCV.code.cbs.pathfinder import Agent
-from OpenCV.code.ScenarioManager import BaseMode, ModeResult
+from OpenCV.code.scenario.ScenarioManager import BaseMode, ModeResult
 
 Cell = Tuple[int, int]
 RobotId = int

@@ -1,3 +1,4 @@
+from logging import root
 import time as timer
 import heapq
 import random
@@ -5,6 +6,8 @@ import random
 # from multi_agent_planner import ll_solver, get_sum_of_cost, compute_heuristics, get_location
 
 from a_star_class import A_Star, get_sum_of_cost, compute_heuristics, get_location
+
+from cbs_basic import apply_delay_constraint
 
 import copy
 
@@ -334,19 +337,16 @@ def should_merge(collision, p, N=0):
 class ICBS_Solver(object):
     """The high-level search of CBS."""
 
-    def __init__(self, my_map, agents):
+    def __init__(self, my_map, starts, goals):
         """my_map   - list of lists specifying obstacle positions
         starts      - [(x1, y1), (x2, y2), ...] list of start locations
         goals       - [(x1, y1), (x2, y2), ...] list of goal locations
         """
 
         self.my_map = my_map
-        self.agents = agents
-
-        self.starts = [agent.start for agent in agents]
-        self.goals = [agent.goal for agent in agents]
-        self.num_of_agents = len(self.goals)
-
+        self.starts = starts
+        self.goals = goals
+        self.num_of_agents = len(goals)
         self.num_of_generated = 0
         self.num_of_expanded = 0
         self.CPU_time = 0
@@ -516,6 +516,10 @@ class ICBS_Solver(object):
             'agent_collisions': None, # matrix of collisions in history between pairs of (meta-)agents
             'ma_list': [] # [{a1,a2}, ... ]
         }       
+
+        for i in range(self.num_of_agents):
+            if hasattr(self, "delays") and self.delays[i] > 0:
+                apply_delay_constraint(root['constraints'], i, self.starts[i], self.delays[i])
         
         for i in range(self.num_of_agents):  # Find initial path for each agent
             astar = AStar(self.my_map, self.starts, self.goals, self.heuristics, [i], root['constraints'])

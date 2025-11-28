@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import math
@@ -5,17 +6,19 @@ from typing import Optional, Tuple, Dict
 from types import SimpleNamespace
 
 
-from OpenCV.code.vision.apriltag import AprilTagDetector
-from OpenCV.code.config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
-from OpenCV.code.vision.board import BoardDetectionResult, BoardDetector
-from OpenCV.code.vision.obstacle import ObstacleDetector
-from OpenCV.code.ui_bridge import FrameBus
+from vision.apriltag import AprilTagDetector
+from config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
+from vision.board import BoardDetectionResult, BoardDetector
+from vision.obstacle import ObstacleDetector
+
 class VisionSystem:
-    def __init__(self, undistorter, visualize=True):
-        
+    def __init__(self, undistorter, visualize=True,):
         self.correction_coef_getter = lambda: CORRECTION_COEF
         self.tags = AprilTagDetector(self.correction_coef_getter)
         self.visualize = visualize
+        self.show_video_display = False    # 원본 영상창 끔
+        self.show_roi_window = False       # ROI Display 완전 비활성
+        self.show_warp_overlay = True
         self.grid_row = grid_row
         self.grid_col = grid_col
         self.undistorter = undistorter
@@ -121,17 +124,6 @@ class VisionSystem:
             self.transform_coordinates(tag_info)
             self.compute_tag_orientation(tag_info)
 
-        # === FrameBus: heading 업데이트 ===
-        headings = {}
-        for tag_id, data in tag_info.items():
-            if data.get("status") != "On":
-                continue
-            heading = data.get("yaw_front_to_north_deg")
-            if heading is not None:
-                headings[tag_id] = heading
-
-        FrameBus.set_headings(headings)
-
         # 6) 시각화 처리
         if self.visualize:
             cv2.rectangle(frame, (roi_x_min, roi_y_min), (roi_x_max, roi_y_max), (0, 0, 255), 2)
@@ -139,15 +131,18 @@ class VisionSystem:
             self.tags.draw(frame)
             self.draw_tag_overlay(frame, tag_info, path_viz_data=path_viz_data)
 
-        if self.manual_roi_top_left and self.manual_roi_bottom_right:
-            roi_display = roi_frame.copy()
-            roi_display = cv2.resize(roi_display, (min(roi_display.shape[1]*2, 800), min(roi_display.shape[0]*2, 800)))
-            cv2.imshow("ROI_Display", roi_display)
+        # if self.manual_roi_top_left and self.manual_roi_bottom_right:
+        #     roi_display = roi_frame.copy()
+        #     roi_display = cv2.resize(roi_display, (min(roi_display.shape[1]*2, 800), min(roi_display.shape[0]*2, 800)))
+        #     cv2.imshow("ROI_Display", roi_display)
 
         # 7) 기타
-        disp_w, disp_h = self.target_display_size
-        display_frame = cv2.resize(frame, (disp_w, disp_h))
-        self.display_size = (disp_w, disp_h)
+        if self.show_video_display:
+            disp_w, disp_h = self.target_display_size
+            display_frame = cv2.resize(frame, (disp_w, disp_h))
+            self.display_size = (disp_w, disp_h)
+        else:
+            display_frame = frame
         
         # 보드가 lock 상태이고 결과가 있을 때
         if self.board.is_locked and self.board_result is not None:
@@ -156,8 +151,6 @@ class VisionSystem:
                 occ = self.obstacle_detector.update_from_board(self.board_result)
                 if occ is not None:
                     self._last_obstacle_grid = (occ.astype('uint8'))
-                    # ★ FrameBus 연동
-                    FrameBus.set_grid_state(self._last_obstacle_grid)
                     self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
                 self.obstacle_locked_once = True
             # 2) src/dst 준비
@@ -184,8 +177,6 @@ class VisionSystem:
             # 3) Homography & 컬러 warp
             H_full = cv2.getPerspectiveTransform(src, dst)
             warped_color = cv2.warpPerspective(raw_bgr, H_full, (new_w, new_h))
-            # ★ FrameBus 연동
-            FrameBus.set_warped(warped_color)
 
             # 4) 그리드/셀 중심 오버레이 (있을 때만)
             ref = getattr(br, "grid_reference", None)

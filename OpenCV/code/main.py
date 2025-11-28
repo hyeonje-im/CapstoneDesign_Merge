@@ -5,24 +5,44 @@ import numpy as np
 import subprocess 
 import math
 import time
+from queue import Queue, Empty
+import threading  # ◀◀◀ [추가]
+import copy
+
+# UI 연동 관련
+
+SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
+
+_KEYQ: "Queue[int]" = Queue()
+
+def push_keycode(code: int):
+    """외부(Kivy)에서 보낸 가상 키코드를 백엔드에 전달"""
+    _KEYQ.put(code)
+
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 ICBS_PATH = os.path.join(CURRENT_DIR, '..', 'MAPF-ICBS', 'code')
 sys.path.append(os.path.normpath(ICBS_PATH))
 
 
-from grid import load_grid, GRID_FOLDER
-from interface import draw_agent_delays_on_grid, grid_visual, slider_create, slider_value, draw_agent_points, draw_paths,draw_home_positions
-from config import grid_row, grid_col, cell_size,cell_size_cm, camera_cfg, MQTT_TOPIC_COMMANDS_, NORTH_TAG_ID, CORRECTION_COEF
-from vision.visionsystem import VisionSystem 
-from vision.camera import camera_open, Undistorter 
-from cbs.pathfinder import PathFinder, Agent
-from RobotController import RobotController
-from recieve_message import set_tag_info_provider    
-from manual_mode import ManualPathSystem  # ← 수동모드 
-from ScenarioManager import ScenarioManager
-from TestMode import TestMode
-from RandomMode import RandomMode
+from OpenCV.code.grid import load_grid, GRID_FOLDER
+from OpenCV.code.interface import grid_visual, slider_create, slider_value, draw_agent_points, draw_paths,draw_home_positions
+from OpenCV.code.config import grid_row, grid_col, cell_size, camera_cfg, IP_address_, MQTT_TOPIC_COMMANDS_ , MQTT_PORT , NORTH_TAG_ID, CORRECTION_COEF, critical_dist 
+from OpenCV.code.vision.visionsystem import VisionSystem
+from OpenCV.code.vision.camera import camera_open, Undistorter 
+from OpenCV.code.cbs.pathfinder import PathFinder, Agent
+from OpenCV.code.controller.RobotController import RobotController
+from OpenCV.code.config import cell_size_cm
+from OpenCV.code.controller.manual_mode import ManualPathSystem
+from OpenCV.code.recieve_message import set_tag_info_provider
+from OpenCV.code.scenario.ScenarioManager import ScenarioManager
+from OpenCV.code.scenario.TestMode import TestMode
+from OpenCV.code.scenario.RandomMode import RandomMode
+from OpenCV.code.scenario.RestaurantMode import RestaurantMode  
+from OpenCV.code.ui_bridge import FrameBus, get_cmd_nowait
 
 SELECTED_RIDS = set()
 
@@ -37,26 +57,35 @@ print(f"▶ command_transfer_encoderSelf.py 별도 콘솔에서 실행: {CTS_SCR
 # 로봇 home지정
 ROBOT_HOME_POSITIONS = {
     # 형식: 로봇ID: (행, 열)
-    4: (0, 0),
-    2: (2, 0),
-    3: (0, 5), 
+    2: (5, 0),
+    3: (0, 0),
+    1: (5, 5), 
 }
 
 MODE_FACTORY = {
     "test": lambda: TestMode(),
-    "random": lambda: RandomMode(
-        home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid)
+    "restaurant": lambda: RestaurantMode(
+        home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid),
+        order_span_sec=(0, 30),
     ),
 }
 _mode_keys = list(MODE_FACTORY.keys())
 _mode_idx = [0]  # 가변 캡쳐용(리스트)
 
+# CBS 설정 !!!수정됨
+SOLVER_CHOICES = ["CBS", "ICBS_CB", "ICBS", "ICBS_CC"]
+_SOLVER_IDX = 0   # 0:CBS, 1:ICBS_CB, 2:ICBS  (기본 CBS)
+DISJOINT = True
+
+def current_solver() -> str:
+    return SOLVER_CHOICES[_SOLVER_IDX]
+
 # 브로커 정보
 # main.py 상단에 USE_MQTT 정의
-USE_MQTT = 1  # 0: 비사용, 1: 사용
+USE_MQTT = 0 # 0: 비사용, 1: 사용
 
 if USE_MQTT:
-    from recieve_message import init_mqtt_client
+    from OpenCV.code.recieve_message import init_mqtt_client
     client = init_mqtt_client()   # ← recieve_message의 '그' 클라이언트 단일 사용
 else:
     MQTT_TOPIC_COMMANDS_ = None
@@ -68,6 +97,7 @@ else:
 controller = RobotController(
     client=client,
     mqtt_topic_commands=MQTT_TOPIC_COMMANDS_,
+    grid_col=grid_col, # <<< [추가] grid_col 전달
     done_topic="robot/done",
     north_tag_id=NORTH_TAG_ID,
     direction_corr_threshold_deg=3.0,
@@ -77,17 +107,43 @@ controller = RobotController(
 )
 
 if USE_MQTT:
-    def _on_msg(c, u, m):
-        try:
-            controller.on_mqtt_message(m.topic, m.payload)
-        except Exception as e:
-            print(f"[on_message error] {e}")
+    def _on_msg(c, u, m):  # ◀◀◀ [수정 시작]
+            try:
+                topic = m.topic
+                payload_str = m.payload.decode("utf-8", "ignore")
+
+                # 1. 컨트롤러가 처리할 'DONE' 메시지
+                if topic == controller.done_topic:
+                    controller.on_mqtt_message(topic, payload_str)
+                
+                # 2. 새로 추가된 'STATUS' 메시지 (예: "robot/3/status")
+                elif topic.endswith("/status"):
+                    # (페이로드 예: "STATUS;Robot_3;msg=QueueCleared")
+                    if "QueueCleared" in payload_str:
+                        print(f"✅ [Robot Status] 로봇 큐가 비워졌습니다! ({payload_str})")
+                    elif "QueueEmpty" in payload_str:
+                        print(f"ℹ️ [Robot Status] 로봇이 연결되었으며, 큐가 비어있습니다. ({payload_str})")
+                    elif "QueueNotEmpty" in payload_str:
+                        # '유지된 메시지'가 있었다는 뜻입니다.
+                        print(f"⚠️ [Robot Status] 로봇 연결됨. 큐가 비어있지 않습니다! ({payload_str})")
+                    else:
+                        print(f"[Robot Status] {topic}: {payload_str}")
+                
+                # 3. 그 외 (필요시)
+                # else:
+                #    print(f"[MQTT Recv] {topic}: {payload_str}")
+
+            except Exception as e:
+                print(f"[on_message error] {e}")
 
     client.on_message = _on_msg
 
     try:
         client.subscribe(controller.done_topic)
         # client.loop_start()  # init_mqtt_client 안에서 이미 실행 중이면 생략
+        status_topic = "robot/+/status"  # ◀◀◀ [추가]
+        client.subscribe(status_topic)   # ◀◀◀ [추가]
+        print(f"▶ MQTT 구독: {controller.done_topic}, {status_topic}") # ◀◀◀ [추가]
     except Exception:
         pass
 
@@ -104,6 +160,7 @@ cv2.createTrackbar(
     int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
 )
 
+
 # 전역 변수
 
 #근접 시 즉시 정지 기능
@@ -118,12 +175,25 @@ grid_array = None
 visualize = True
 # tag_info 전역 변수 초기화
 tag_info = {}
-set_tag_info_provider(lambda: tag_info)
+
+TAG_INFO_LOCK = threading.Lock()
+
+def get_tag_info_safe():  # ◀◀◀ [추가 시작]
+    """
+    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
+    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
+     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
+    """
+    with TAG_INFO_LOCK:
+        return copy.deepcopy(tag_info)
+    
+set_tag_info_provider(get_tag_info_safe)
 
 # 비전 시스템 초기화
-# video_path = r"C:/img/test2.mp4"
+#video_path = r"C:/img/test2.mp4"
 cap, fps = camera_open(source=None)
-
+#!!! 수정됨
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 undistorter = Undistorter(
     camera_cfg['type'],
     camera_cfg['matrix'],
@@ -138,6 +208,7 @@ PRESET_IDS = []
 selected_robot_id = None
 
 
+
 def compute_visible_robot_ids(tag_info: dict) -> list[int]:
     """카메라에 잡힌 '로봇' 태그 ID를 정렬 리스트로 반환 (보드/NORTH_TAG_ID 제외)."""
     visible = []
@@ -147,6 +218,69 @@ def compute_visible_robot_ids(tag_info: dict) -> list[int]:
             visible.append(tid)
     visible.sort()
     return visible
+
+
+def show_orders_text_panel(ui_state: dict):
+    import numpy as np, cv2
+    H, W = 400, 360
+    PAD_X = 10
+    LINE_SP = 26
+
+    img = np.full((H, W, 3), 255, np.uint8)
+
+    # --- 상단: HOME만 표시 (대괄호 제거, 숫자만) ---
+    home_set = sorted(ui_state.get("home_set", []))
+    home_str = " ".join(str(x) for x in home_set) if home_set else ""
+    y = 22
+    cv2.putText(img, f"Home: {home_str}", (PAD_X, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2, cv2.LINE_AA)
+
+    # --- 중앙 제목: Orders (가운데 정렬 + 큰 글씨) ---
+    title = "Orders"
+    (tw, th), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 3)
+    y = 22 + LINE_SP + 8
+    tx = (W - tw) // 2
+    cv2.putText(img, title, (tx, y),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,0,0), 3, cv2.LINE_AA)
+
+    # --- 제목 아래 가로줄 ---
+    y_line = y + 10
+    cv2.line(img, (PAD_X, y_line), (W - PAD_X, y_line), (0,0,0), 2)
+
+    # --- 주문 목록: '진행 중'은 굵게, 대기중은 일반 ---
+    y = y_line + 20
+    # 진행 중(테이블 가는 중/홈 복귀 중)
+    active_to_table = set((int(r), tuple(dst)) for (r, dst) in ui_state.get("order_to_table", []))
+    active_to_home  = set((int(r), tuple(dst)) for (r, dst) in ui_state.get("order_to_home", []))
+    active = active_to_table | active_to_home
+
+    # 대기 중 큐
+    pending = [(int(r), tuple(dst)) for (r, dst) in ui_state.get("order_list", [])]
+
+    # 화면에 보여줄 최종 목록: 진행중 먼저, 그 다음 대기
+    render_list = list(active) + pending
+
+    if not render_list:
+        cv2.putText(img, "(no orders)", (PAD_X, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128,128,128), 2, cv2.LINE_AA)
+    else:
+        shown = 0
+        for (rid, dst) in render_list:
+            txt = f"{rid} > {tuple(dst)}"
+            # 진행중은 두껍게(굵게)
+            is_active = (rid, dst) in active
+            thickness = 3 if is_active else 2
+            scale = 0.9 if is_active else 0.8
+            cv2.putText(img, txt, (PAD_X, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, (0,0,0), thickness, cv2.LINE_AA)
+            y += LINE_SP
+            shown += 1
+            if shown >= 14:  # 너무 많으면 컷
+                break
+
+    cv2.imshow("Orders", img)
+    FrameBus.set_orders(img)
+
 
 
 def _get_tag_cm(tag_info: dict, rid: int):
@@ -241,6 +375,29 @@ def mouse_event(event, x, y, flags, param):
         # 우클릭 한 번으로 끝 — 선택은 해제
         selected_robot_id = None
 
+def handle_number_key_unified(key):
+    """
+    숫자키(1~9) 공통 핸들러:
+      1) 숫자키 이벤트를 ScenarioManager로 라우팅
+      2) 기존 UI 선택/토글 및 selected_robot_id 갱신
+    """
+    global SELECTED_RIDS, selected_robot_id
+    rid = int(chr(key))
+
+   
+
+    # 2) 기존 UI 토글 유지
+    if rid in SELECTED_RIDS:
+        SELECTED_RIDS.remove(rid)
+        print(f"[-] 선택 해제: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
+    else:
+        SELECTED_RIDS.add(rid)
+        print(f"[+] 선택 추가: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
+
+    selected_robot_id = rid
+    print(f"🎯 목표지정 대상 로봇: {selected_robot_id}")
+
+
 # ---------------------------
 # 수동 경로 시스템 연결부
 # ---------------------------
@@ -309,11 +466,13 @@ scenario = ScenarioManager(
     agents_ref=agents,
     paths_ref=paths,
     get_grid=lambda: grid_array,
-    get_tag_info=lambda: tag_info,
+    get_tag_info=get_tag_info_safe,
     path_to_commands=path_to_commands,
     get_initial_hd=get_initial_hd,
     mode=TestMode()  # 필요시 다른 모드로 교체
 )
+
+FrameBus.set_mode(_mode_keys[_mode_idx[0]])   # 초기 모드값 UI로 전달
 
 # 마우스 콜백(수동 모드일 때는 수동 핸들러로 보냄)
 def unified_mouse(event, x, y, flags, param):
@@ -364,7 +523,10 @@ def compute_cbs():
             pass
 
     # 2) PathFinder는 매번 최신 그리드로 생성
-    pathfinder_local = PathFinder(aug_grid)
+    pathfinder_local = PathFinder(aug_grid, 
+                                  solver_type=current_solver(),
+                                  disjoint=DISJOINT,
+                                  visualize_result=False)
 
     # 3) 계산 및 결과 반영
     solved_agents = pathfinder_local.compute_paths(ready_agents)
@@ -425,7 +587,7 @@ def immediate_stop(client, ids):
         print(f"🛑 [Robot_{rid}] 즉시정지(im_S) 전송")
         
 def main():
-    global agents, paths, visualize, tag_info, grid_array, selected_robot_id
+    global agents, paths, visualize, tag_info, grid_array, selected_robot_id, _SOLVER_IDX, DISJOINT
 
     # 그리드 불러오기(비전 결과로 대체되기 전까지 0으로 시작)
     grid_array = np.zeros((grid_row, grid_col), dtype=np.uint8)
@@ -433,20 +595,30 @@ def main():
     # 슬라이더 생성
     slider_create()
     detect_params = slider_value()
-
-    cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("Video_display", vision.mouse_callback)
-    cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("CBS Grid", unified_mouse)  # ← 수동 모드 대응
+    
+    # UI 맞게 수정
+    #=========================================
+    #=========================================
+    
+    if SHOW_CV_WINDOWS:
+        cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("Video_display", vision.mouse_callback)
+        cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("CBS Grid", unified_mouse)  # ← 수동 모드 대응
+        controller.set_board_info_provider(lambda: vision.board_result) # <<< [추가]
 
     while True:
-        ret, frame = cap.read()
+        path_viz_data = controller.get_current_step_info()
+        #!!! 수정됨
+        for _ in range(2):
+            cap.grab()
+        ret, frame = cap.retrieve()
         if not ret:
             print("프레임 획득 실패")
             continue
 
         # 1) 프레임 처리
-        visionOutput = vision.process_frame(frame, detect_params)
+        visionOutput = vision.process_frame(frame, detect_params, path_viz_data=path_viz_data)
         if visionOutput is None:
             continue
         ob_grid = vision.get_obstacle_grid()
@@ -454,31 +626,224 @@ def main():
             grid_array = ob_grid.copy()
         
         vis = grid_visual(grid_array.copy())
-        draw_home_positions(vis, ROBOT_HOME_POSITIONS)
+        draw_home_positions(vis, ROBOT_HOME_POSITIONS) 
 
         # 2) 새 프레임 기반으로 화면/태그 정보 먼저 갱신
         frame = visionOutput["frame"]
-        tag_info = visionOutput["tag_info"]
+        with TAG_INFO_LOCK:  # ◀◀◀ [추가] (쓰기 보호)
+            tag_info = visionOutput["tag_info"]
         controller.set_tag_info_provider(lambda: tag_info)
+        
 
-        # 3) 새 tag_info로 PRESET_IDS q갱신
+        # 3) 새 tag_info로 PRESET_IDS 갱신
         _prev = PRESET_IDS[:]
+        current_tags_safe = get_tag_info_safe()
         new_ids = compute_visible_robot_ids(tag_info)
         PRESET_IDS[:] = new_ids
-        
         scenario.tick()
+        
         if any("grid_position" in data for data in visionOutput["tag_info"].values()):
             update_agents_from_tags(visionOutput["tag_info"])
+
+        # UI 연동
+        # =============================
+        # =============================
+        FrameBus.set_video(frame)
+        FrameBus.set_grid(vis)
+        
+        # -------------------------------
+        # 🔥 FrameBus로 UI 동기화 보내기
+        # -------------------------------
+        FrameBus.set_grid_state(grid_array)
+
+        # 로봇 위치 업데이트
+        agent_dict = {}
+        for a in agents:
+            if a.start:
+                agent_dict[a.id] = a.start
+        FrameBus.set_agent_states(agent_dict)
+
+        # heading 정보 업데이트
+        heading_dict = {}
+        for rid, data in tag_info.items():
+            if data.get("status") == "On" and "yaw_front_deg" in data:
+                heading_dict[rid] = data["yaw_front_deg"]
+        FrameBus.set_headings(heading_dict)
+
+        # goal(목표지)
+        goal_dict = {}
+        for a in agents:
+            if a.goal:
+                goal_dict[a.id] = a.goal
+        FrameBus.set_goal_positions(goal_dict)
+
+        # home(출발지)
+        FrameBus.set_home_positions(ROBOT_HOME_POSITIONS)
+
+        # CBS 경로
+        path_list = []
+        for a in agents:
+            p = a.get_final_path()
+            if p:
+                path_list.append((a.id, p))
+        FrameBus.set_paths(path_list)
+
+
+        # UI 명령 처리 (버튼 클릭, 키 입력 등)
+        # =============================
+        # =============================
+        cmd, kwargs = get_cmd_nowait()
+        if cmd == "select_robot":                 # (UI 숫자 버튼 → 숫자키 동일 처리)
+            rid = int(kwargs["rid"])
+            # 🔥 UI 선택 로봇을 FrameBus에 저장
+            FrameBus.set_selected_robot(rid)
+            fake_key = ord(str(rid))                # 숫자키 코드로 변환 (예: 1 → 49)
+            handle_number_key_unified(fake_key)     # 🔹 숫자키와 동일한 로직 수행
+            print(f"[UI] 로봇 선택됨 → {rid}")
+
+
+        elif cmd == "compute_cbs":                # 키: 'c'
+            compute_cbs()
+
+        elif cmd == "lock_board":                 # 키: 'n'
+            vision.lock_board()
+            print("[UI] 보드 고정됨")
+
+        elif cmd == "unlock_board":               # 키: 'b'
+            vision.reset_board()
+            print("[UI] 보드 고정 해제")
+
+        elif cmd == "toggle_visualization":       # 키: 'v'
+            vision.toggle_visualization()
+            print(f"[UI] 시각화 모드: {'ON' if vision.visualize else 'OFF'}")
+
+        elif cmd == "start_roi_selection":        # 키: 's'
+            vision.start_roi_selection()
+            print("[UI] ROI 재선택 시작")
+
+        elif cmd == "center_align":               # 키: 'a'
+            send_release_all(client, PRESET_IDS)
+            controller.run_center_align(PRESET_IDS, do_release=False)
+            print("[UI] 센터 정렬 전송")
+
+        elif cmd == "direction_align":            # 키: 'f'
+            send_release_all(client, PRESET_IDS)
+            controller.run_direction_align(PRESET_IDS, do_release=False)
+            print("[UI] 방향 정렬 전송")
+
+        elif cmd == "pause":                      # 키: 't'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.pause([str(r) for r in targets])
+                print(f"[UI] 정지: {targets}")
+            else:
+                print("[UI] 정지 대상 없음")
+
+        elif cmd == "resume":                     # (키: 기본 없음, 과거 'y'와 유사 동작)
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.resume([str(r) for r in targets])
+                print(f"[UI] 재개: {targets}")
+            else:
+                print("[UI] 재개 대상 없음")
+
+        elif cmd == "immediate_stop":             # 키: 'u'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                immediate_stop(client, targets)
+                print(f"[UI] 즉시정지: {targets}")
+            else:
+                print("[UI] 즉시정지 대상 없음")
+
+        elif cmd == "save_grid":                  # 키: 'g'
+            saved = None
+            if vision.obstacle_detector is not None and vision.obstacle_detector.last_occupancy is not None:
+                saved = vision.obstacle_detector.save_grid(save_dir=GRID_FOLDER)
+            print(f"[UI] Grid 저장: {saved}" if saved else "[UI] 저장할 Grid 없음")
+
+        elif cmd == "reset_all":                  # 키: 'r'
+            agents.clear()
+            paths.clear()
+            manual.reset_paths()
+            print("[UI] Reset all")
+
+        elif cmd == "manual_toggle":              # 키: 'z'
+            manual.toggle_mode()
+            print(f"[UI] 수동 모드: {'ON' if manual.is_manual_mode() else 'OFF'}")
+
+        elif cmd == "quit":                       # 키: 'q'
+            raise SystemExit("[UI] Quit 요청")
+
+        elif cmd == "toggle_scenario_mode":          # 키: 'm'
+            _mode_idx[0] = (_mode_idx[0] + 1) % len(_mode_keys)
+            name = _mode_keys[_mode_idx[0]]
+            scenario.set_mode(MODE_FACTORY[name]())
+            FrameBus.set_mode(name) # UI에 현재 모드명 전달
+            print(f"[UI][Scenario] mode ← {name} (실행상태는 유지)")
+
+        elif cmd == "toggle_scenario_run":           # 키: Spacebar
+            scenario.toggle_enabled()
+            print(f"[UI][Scenario] 실행 상태: {'ON' if scenario.enabled else 'OFF'}")
+
+        elif cmd == "resume":                        # 키: 'y'
+            targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
+            if targets:
+                controller.resume([str(r) for r in targets])
+                for r in targets:
+                    PROXIMITY_STOP_LATCH.discard(int(r))
+                print(f"[UI] 재개: {targets}")
+            else:
+                print("[UI] 재개 대상 없음")
+
+        elif cmd == "set_goal":                   # (그리드 클릭, 키 없음)
+            rid = int(kwargs["rid"])
+            row = int(kwargs["row"])
+            col = int(kwargs["col"])
+            tgt = next((a for a in agents if a.id == rid), None)
+            if tgt is None:
+                print(f"[UI] set_goal 실패: 에이전트 {rid} 없음")
+            else:
+                tgt.goal = (row, col)
+                print(f"[UI] 로봇 {rid} 목표=({row},{col}) 설정")
+
+
+        elif cmd == "auto_release_align_cbs":  # (UI 버튼용)
+            # 기존 o키 기능 그대로 복제
+            send_release_all(client, PRESET_IDS)
+            ready_agents = [a for a in agents if a.start and a.goal]
+            waiters = [a for a in agents if a.start and not a.goal]
+
+            waiter_ids = [a.id for a in waiters]
+            if waiter_ids:
+                controller.run_align_sequence(waiter_ids, do_release=False)
+
+            compute_cbs()
+            print("[UI] 전체 Release + Align + CBS 실행 완료")
+
+        elif cmd == "solver_next":
+            _SOLVER_IDX = (_SOLVER_IDX + 1) % len(SOLVER_CHOICES)
+            print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+
+        elif cmd == "solver_prev":
+            _SOLVER_IDX = (_SOLVER_IDX - 1) % len(SOLVER_CHOICES)
+            print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+
+        elif cmd == "toggle_disjoint":
+            DISJOINT = not DISJOINT
+            print(f"[UI][MAPF] disjoint = {DISJOINT}")
+
+        # =============================
+        # =============================
 
         # UI 시각화 화면
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
-        
-        from interface import draw_agent_delays_on_grid
-        draw_agent_delays_on_grid(vis, agents, home_positions=ROBOT_HOME_POSITIONS)
-        
         manual.draw_overlay(vis)  # ← 수동 경로 오버레이
-
+        ui_state = scenario.get_mode_ui_state(drain_new=True)
+        
+        if ui_state:
+            show_orders_text_panel(ui_state)
+             
         cv2.imshow("CBS Grid", vis)
         cv2.imshow("Video_display", frame)
 
@@ -491,6 +856,7 @@ def main():
             paths.clear()
             manual.reset_paths()  # ← 수동 경로만 초기화 추가
         elif key == ord('c'):
+            scenario.set_enabled(False)
             if manual.is_manual_mode():
                 # 수동 경로 전송(선택된 로봇의 수동 경로를 command로 변환한 뒤 전송)
                 manual.commit()
@@ -519,21 +885,15 @@ def main():
         elif key == ord('a'):
             send_release_all(client, PRESET_IDS)
             controller.run_center_align(PRESET_IDS, do_release=False)
+        # 숫자키로 대상 선택/토글 (예: 1~9)
         elif key in tuple(ord(str(i)) for i in range(1, 10)):
-            rid = int(chr(key))
-            if rid in SELECTED_RIDS:
-                SELECTED_RIDS.remove(rid)
-                print(f"[-] 선택 해제: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
-            else:
-                SELECTED_RIDS.add(rid)
-                print(f"[+] 선택 추가: {rid} / 현재 선택: {sorted(SELECTED_RIDS)}")
-            selected_robot_id = rid
-            print(f"🎯 목표지정 대상 로봇: {selected_robot_id}")
+            handle_number_key_unified(key)
+
         # 선택 로봇 정지 (그냥 누르면 전체 정지)
         elif key == ord('t'):
             targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
             if targets:
-                'controller'.pause([str(r) for r in targets])
+                controller.pause([str(r) for r in targets])
             else:
                 print("⚠️ 정지할 접속 로봇이 없습니다.")
         elif key == ord('y'):
@@ -553,19 +913,50 @@ def main():
                     print(f"🛑 모든 접속 로봇 즉시 정지(im_S): {PRESET_IDS}")
                 else:
                     print("⚠️ 즉시 정지할 접속 로봇이 없습니다.")
-        # 수동 모드 
+
+        elif key == ord('o'):
+            # 1) 전체 RE
+            send_release_all(client, PRESET_IDS)
+
+            # 2) 대기(waiter)와 준비(ready) 분리
+            ready_agents = [a for a in agents if a.start and a.goal]
+            waiters      = [a for a in agents if a.start and not a.goal]
+
+            waiter_ids = [a.id for a in waiters]
+            if waiter_ids:
+                # 3) 대기는 중앙정렬 → 방향정렬 병렬 실행
+                #    RE는 이미 보냈으므로 do_release=False
+                controller.run_align_sequence(waiter_ids, do_release=False)
+
+            # 4) ready만 대상으로 CBS 경로 계산&송신
+            #    compute_cbs()는 대기자를 장애물로 올려서 경로를 짬
+            compute_cbs()
+
+        # 수동 모드
         elif key == ord('z'):
-            manual.toggle_mode()  
+            manual.toggle_mode() 
+            
         # 랜덤 모드    
         elif key == ord('m'): 
             _mode_idx[0] = (_mode_idx[0] + 1) % len(_mode_keys)
             name = _mode_keys[_mode_idx[0]]
             scenario.set_mode(MODE_FACTORY[name]())
+            FrameBus.set_mode(name) # UI에 현재 모드명 전달
             print(f"[Scenario] mode ← {name} (실행상태는 유지)")
 
         elif key == 32:  # Spacebar
             scenario.toggle_enabled()
 
+        elif key == ord(']'):   # 옵션 다음으로
+            _SOLVER_IDX = (_SOLVER_IDX + 1) % len(SOLVER_CHOICES)
+            print(f"[MAPF] solver_type = {current_solver()}  (disjoint={DISJOINT})")
+        elif key == ord('['):   # 옵션 이전으로
+            _SOLVER_IDX = (_SOLVER_IDX - 1) % len(SOLVER_CHOICES)
+            print(f"[MAPF] solver_type = {current_solver()}  (disjoint={DISJOINT})")
+        elif key == ord('p'):  
+            DISJOINT = not DISJOINT
+            print(f"[MAPF] disjoint = {DISJOINT}")
+        
         # elif key == ord('d'):
         #     if manual.is_manual_mode():
         #         print("ℹ️ 수동모드에서는 d(자동시퀀스) 비활성화. Z로 해제 후 사용하세요.")
@@ -580,12 +971,7 @@ def main():
         #             compute_cbs,                          # 경로계산/전송
         #             check_all_completed                   # 완료 확인
         #         )
-    
-
-    #print("▶ 'q' 입력 감지. command_transfer.py 종료 시도...")
     cts_process.terminate()
-
-
     cap.release()
     cv2.destroyAllWindows()
 

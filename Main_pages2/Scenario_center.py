@@ -90,15 +90,7 @@ class ScenarioCenterWidget(BoxLayout):
         self.order_list = ScenarioOrderList(size_hint_x=1)
         upper.add_widget(self.order_list)
 
-        # ------ 오른쪽: 기존 GridWidget ------
-        grid_holder = AnchorLayout(size_hint_x=1,)
-        self.grid_view = GridWidget(grid_json_path = "OpenCV/grid/0926grid.json",
-                                    size_hint=(0.95, 0.95))
-        grid_holder.add_widget(self.grid_view)
-
-        upper.add_widget(grid_holder)
-
-        self.add_widget(upper)
+        
 
         # ================= 하단 버튼 그룹 (2×2 그리드) =================
         lower = GridLayout(rows=2, cols=2, size_hint_y=0.25, spacing=10)
@@ -151,11 +143,11 @@ class ScenarioCenterWidget(BoxLayout):
         lower.add_widget(mapf_group)
 
         # 하단 전체 추가
+        self.add_widget(upper)
         self.add_widget(lower)
+        
 
-        # # 백엔드 → Grid 자동 업데이트
-        Clock.schedule_interval(self.update_grid_from_backend, 0.1)
-
+        
 
 
     # ================= Helper Methods =================
@@ -164,13 +156,7 @@ class ScenarioCenterWidget(BoxLayout):
         self.bg.size = self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
 
-    def update_grid_from_backend(self, dt):
-        self.grid_view.update_backend_state(
-            grid_state=FrameBus.get_grid_state(),
-            agent_states=FrameBus.get_agent_states(),
-            paths=FrameBus.get_paths(),
-            home_positions=FrameBus.get_home_positions(),
-        )
+    
 
     
     def toggle_mode(self, *args):

@@ -5,7 +5,7 @@ import random
 
 class PathFinder:
     def __init__(self, grid_array: np.ndarray,
-                 solver_type: str = "CBS",
+                 solver_type: str = "ICBS_CC",
                  disjoint: bool = True,
                  visualize_result: bool = False):
         self.grid = grid_array
