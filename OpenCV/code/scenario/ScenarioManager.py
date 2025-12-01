@@ -1,17 +1,19 @@
-# ScenarioManager.py (FULL PATCHED VERSION)
+# ScenarioManager.py (FINAL WITH UI-LINK)
 from __future__ import annotations
 from typing import Protocol, TypedDict, Dict, List, Set, Tuple, Optional, Callable
 import numpy as np
-from OpenCV.code.cbs.pathfinder import PathFinder, Agent
-from OpenCV.code.ui_bridge import FrameBus
-import threading
 import time, random
+
+from OpenCV.code.cbs.pathfinder import PathFinder, Agent
+from OpenCV.code.ui_bridge import FrameBus   # ★ UI 연동 추가
 
 Cell = Tuple[int, int]
 RobotId = int
 
 
-# ---- ModeResult 표준 ----
+# -------------------------------------------------------------------
+# ModeResult (모드 → 매니저로 전달되는 신호 구조)
+# -------------------------------------------------------------------
 class ModeResult(TypedDict, total=False):
     replan: bool
     reason: str
@@ -22,28 +24,32 @@ class ModeResult(TypedDict, total=False):
     align_direction: Set[RobotId]
 
 
-# ---- 모드 인터페이스 ----
+# -------------------------------------------------------------------
+# 모드 인터페이스
+# -------------------------------------------------------------------
 class IMode(Protocol):
     def enter(self, *, tag_info: dict, grid: np.ndarray, agents: List[Agent],
-              ctx: Dict[int, dict], runstate: Dict[int, dict]) -> None: ...
+              ctx: Dict[int, dict], runstate: Dict[int, dict]): ...
     def exit(self, *, tag_info: dict, grid: np.ndarray, agents: List[Agent],
-             ctx: Dict[int, dict], runstate: Dict[int, dict]) -> None: ...
+             ctx: Dict[int, dict], runstate: Dict[int, dict]): ...
     def tick(self, *, tag_info: dict, grid: np.ndarray, agents: List[Agent],
              ctx: Dict[int, dict], runstate: Dict[int, dict]) -> ModeResult | None: ...
     def on_sequence_complete(self, *, tag_info: dict, grid: np.ndarray, agents: List[Agent],
              ctx: Dict[int, dict], runstate: Dict[int, dict]) -> ModeResult | None: ...
 
 
-# =============== ScenarioManager (Fixed) ==================
+# ===================================================================
+#                        ScenarioManager
+# ===================================================================
 class ScenarioManager:
     """
-    단일 책임:
-    - 태그/맵 읽어서 모드 tick 전달
-    - 모드가 replan 요청하면 CBS 실행
-    - 컨트롤러 콜백 관리
-    - UI에 로봇 상태 패킷 전달
+    - 매 프레임 태그/맵을 읽어 현재 모드에 전달
+    - 모드가 replan 요청 → CBS 실행 및 명령 전송
+    - 정렬, 콜백, 번호키 처리
+    - ★ UI 연동 (FrameBus) 상태 생성
     """
 
+    # ---------------------------------------------------------------
     def __init__(
         self,
         *,
@@ -54,8 +60,8 @@ class ScenarioManager:
         get_tag_info: Callable[[], dict],
         path_to_commands: Callable[[List[Cell], int], List[dict]],
         get_initial_hd: Callable[[RobotId], int],
-        pathfinder_factory: Optional[Callable[[np.ndarray], PathFinder]] = None,
-        mode: IMode
+        pathfinder_factory=None,
+        mode: IMode,
     ):
         self.controller = controller
         self.agents_ref = agents_ref
@@ -66,129 +72,166 @@ class ScenarioManager:
         self.get_initial_hd = get_initial_hd
         self.pathfinder_factory = pathfinder_factory or (lambda grid: PathFinder(grid))
 
-        self.controller.set_alignment_completion_callback(self.on_align_complete)
-        self.controller.set_robot_completion_callback(self.on_robot_complete)
-        self.controller.set_sequence_completion_callback(self.on_sequence_complete)
-
         self.mode: IMode = mode
         self.enabled: bool = False
         self.ctx: Dict[int, dict] = {}
 
-        self._sync_starts_from_tags()
-        rs = self._build_runstate()
-        self.mode.enter(tag_info=self.get_tag_info(), grid=self.get_grid(),
-                        agents=self.agents_ref, ctx=self.ctx, runstate=rs)
-
-        self._active_step_plan: Dict[int, Dict[str, Dict[str, Cell]]] = {}
-        self._active_step_count: int = 0
+        self._delayed_align_jobs = []
         self._initial_hd_hint: Dict[int, int] = {}
-
         self._replan_requested = False
         self._replanning = False
 
-        # ⭐ ARRIVED 감지 플래그 + 최신 runstate 저장
-        self._sequence_done_flag: Dict[int, bool] = {}
-        self._last_runstate: Dict[int, dict] = {}
+        self._active_step_plan = {}
+        self._active_step_count = 0
 
-        # ⭐ 주문 히스토리 패킷 관리
-        self._pending_orders = []
+        # Controller 콜백 등록
+        controller.set_alignment_completion_callback(self.on_align_complete)
+        controller.set_robot_completion_callback(self.on_robot_complete)
+        controller.set_sequence_completion_callback(self.on_sequence_complete)
 
-
-    # --------------------------------------------------------
-    def set_mode(self, mode: IMode):
-        rs = self._build_runstate()
-        self.mode.exit(tag_info=self.get_tag_info(), grid=self.get_grid(),
-                       agents=self.agents_ref, ctx=self.ctx, runstate=rs)
-        self.mode = mode
-        self.ctx.clear()
+        # 최초 진입
         self._sync_starts_from_tags()
         rs = self._build_runstate()
-        self.mode.enter(tag_info=self.get_tag_info(), grid=self.get_grid(),
-                        agents=self.agents_ref, ctx=self.ctx, runstate=rs)
+        self.mode.enter(
+            tag_info=self.get_tag_info(), grid=self.get_grid(),
+            agents=self.agents_ref, ctx=self.ctx, runstate=rs
+        )
+    def set_mode(self, mode: IMode):
+        """모드 교체 (상태 초기화 간단화)"""
+        # 1) 현재 runstate를 만든 뒤, 기존 모드에 exit(runstate=...) 전달
+        rs = self._build_runstate()
+        self.mode.exit(
+            tag_info=self.get_tag_info(),
+            grid=self.get_grid(),
+            agents=self.agents_ref,
+            ctx=self.ctx,
+            runstate=rs,
+        )
+        # 2) 모드 교체 및 컨텍스트 초기화
+        self.mode = mode
+        self.ctx.clear()
+        # 3) 최신 상태 동기화 후 새 모드 enter
+        self._sync_starts_from_tags()
+        rs = self._build_runstate()
+        self.mode.enter(
+            tag_info=self.get_tag_info(),
+            grid=self.get_grid(),
+            agents=self.agents_ref,
+            ctx=self.ctx,
+            runstate=rs,
+        )
 
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
     def set_enabled(self, on: bool):
         self.enabled = bool(on)
-        print(f"[Scenario] {'ENABLED' if self.enabled else 'PAUSED'}")
+        print(f"[Scenario] {'ENABLED' if on else 'PAUSED'}")
 
-    # --------------------------------------------------------
+        if self.enabled:
+            self._sync_starts_from_tags()
+            rs = self._build_runstate()
+            res = self.mode.enter(
+                tag_info=self.get_tag_info(),
+                grid=self.get_grid(),
+                agents=self.agents_ref,
+                ctx=self.ctx,
+                runstate=rs,
+            )
+            # 정렬/재계획 처리
+            if res:
+                ac = set(res.get("align_center") or [])
+                ad = set(res.get("align_direction") or [])
+                targets = sorted(list(ac | ad))
+                if targets:
+                    self.ctx.setdefault("_align_gate", set()).update(targets)
+                    self.controller.run_align_sequence(targets, do_release=False)
+
+                if res.get("replan") and not self.ctx.get("_align_gate"):
+                    if getattr(self.controller, "active", False):
+                        self.controller.request_pause_on_step_boundary()
+                        self._replan_requested = True
+                    else:
+                        self._sync_starts_from_tags()
+                        self._plan_and_send(self.get_grid(), res)
+
     def toggle_enabled(self):
         self.set_enabled(not self.enabled)
 
-    # --------------------------------------------------------
-    def on_align_complete(self, rid: str):
-        if not self.enabled:
-            return
-        self._sync_starts_from_tags()
-        rs = self._build_runstate()
-
-        if hasattr(self.mode, "on_alignment_complete"):
-            res = self.mode.on_alignment_complete(int(rid),
-                        tag_info=self.get_tag_info(), grid=self.get_grid(),
-                        agents=self.agents_ref, ctx=self.ctx, runstate=rs)
-            if res and res.get("replan"):
-                self._plan_and_send(self.get_grid(), res)
-
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
     def tick(self):
         if not self.enabled:
             return
 
         self._sync_starts_from_tags()
-        grid = self.get_grid()
-        tag = self.get_tag_info()
 
-        # ⭐ runstate 저장 (status 계산용)
-        runstate = self._build_runstate()
-        self._last_runstate = runstate
-
-        res = self.mode.tick(tag_info=tag, grid=grid,
-                             agents=self.agents_ref, ctx=self.ctx,
-                             runstate=runstate)
-
-        if res:
-            ac = res.get("align_center") or set()
-            ad = res.get("align_direction") or set()
-            targets = sorted(list(ac | ad))
-
-            if targets:
+        # 딜레이 정렬 처리
+        now = time.time()
+        if self._delayed_align_jobs:
+            due, later = [], []
+            for (t, targets, reason) in self._delayed_align_jobs:
+                (due if now >= t else later).append((t, targets, reason))
+            self._delayed_align_jobs = later
+            for _, targets, _ in due:
+                targets = sorted(list(set(targets)))
+                self.ctx.setdefault("_aligning", set()).update(targets)
                 self.controller.run_align_sequence(targets, do_release=False)
 
-            if res.get("replan"):
-                if getattr(self.controller, "active", False):
-                    self.controller.request_pause_on_step_boundary()
-                    self._replan_requested = True
-                    print("[Scenario] replan requested → deferred")
-                else:
-                    print("[Scenario] replan requested → immediate")
-                    self._sync_starts_from_tags()
-                    self._plan_and_send(self.get_grid(), res)
+        # 모드 tick
+        grid = self.get_grid()
+        tag = self.get_tag_info()
+        rs = self._build_runstate()
+        res = self.mode.tick(
+            tag_info=tag, grid=grid, agents=self.agents_ref,
+            ctx=self.ctx, runstate=rs
+        )
 
-            # ⭐ UI 패킷 생성
-            self.export_robot_ui_state(res)
+        # replan 처리
+        if res and res.get("replan"):
+            if getattr(self.controller, "active", False):
+                self.controller.request_pause_on_step_boundary()
+                self._replan_requested = True
+            else:
+                self._sync_starts_from_tags()
+                self._plan_and_send(self.get_grid(), res)
 
-        # ⭐ ARRIVED 플래그 1프레임 유지 후 즉시 리셋
-        for rid in list(self._sequence_done_flag.keys()):
-            self._sequence_done_flag[rid] = False
+        # ★ UI 업데이트 추가
+        self._update_ui_state(rs)
 
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
+    # align 콜백
+    def on_align_complete(self, rid: str):
+        aligning = self.ctx.get("_aligning", set())
+        aligning.discard(int(rid))
+
+        res = None
+        if hasattr(self.mode, "on_alignment_complete"):
+            res = self.mode.on_alignment_complete(
+                int(rid),
+                tag_info=self.get_tag_info(),
+                grid=self.get_grid(),
+                agents=self.agents_ref,
+                ctx=self.ctx,
+                runstate=self._build_runstate(),
+            )
+
+        if res and res.get("replan"):
+            if getattr(self.controller, "active", False):
+                self.controller.request_pause_on_step_boundary()
+                self._replan_requested = True
+            else:
+                self._plan_and_send(self.get_grid(), res or {})
+
+    # ---------------------------------------------------------------
+    # sequence 콜백
     def on_sequence_complete(self, info=None):
         if not self.enabled:
             return
 
         self._sync_starts_from_tags()
         rs = self._build_runstate()
-
         res = self.mode.on_sequence_complete(
             tag_info=self.get_tag_info(), grid=self.get_grid(),
             agents=self.agents_ref, ctx=self.ctx, runstate=rs
         ) or {}
-
-        ac = res.get("align_center") or set()
-        ad = res.get("align_direction") or set()
-        targets = sorted(list(ac | ad))
-        if targets:
-            self.controller.run_align_sequence(targets, do_release=False)
 
         should_replan = self._replan_requested or res.get("replan", False)
         if not should_replan:
@@ -197,136 +240,136 @@ class ScenarioManager:
 
         if self._replanning:
             return
-
         self._replanning = True
 
-        def _deferred_replan(grid_snapshot, res_snapshot):
-            try:
-                self._sync_starts_from_tags()
-                last_plan = getattr(self, "_active_step_plan", {}) or {}
-                max_step = max(last_plan.keys()) if last_plan else -1
+        try:
+            self._sync_starts_from_tags()
+            # last dst fallback 생략 (기존 그대로 유지)
+            grid = self.get_grid()
+            self._plan_and_send(grid, res)
+        finally:
+            self._replanning = False
+            self._replan_requested = False
 
-                def _last_dst_for(r):
-                    r_s = str(r)
-                    for s in range(max_step, -1, -1):
-                        info = (last_plan.get(s, {}).get(r_s)) or (last_plan.get(s, {}).get(r))
-                        if info and info.get("dst") is not None:
-                            return tuple(info["dst"])
-                    return None
+        # ★ UI 업데이트
+        self._update_ui_state(rs)
 
-                tag_info = self.get_tag_info()
-                for a in self.agents_ref:
-                    visible = ("grid_position" in (tag_info.get(a.id) or {})) and \
-                              (tag_info.get(a.id, {}).get("status") == "On")
-                    if not visible:
-                        ld = _last_dst_for(a.id)
-                        if ld:
-                            a.start = ld
-
-                self._plan_and_send(grid_snapshot, res_snapshot)
-
-            finally:
-                self._replan_requested = False
-                self._replanning = False
-
-        grid_now = self.get_grid()
-        print("[Scenario] sequence complete → 1.0s delayed replan")
-        threading.Timer(1.0, _deferred_replan, args=[grid_now, res]).start()
-
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
     def _sync_starts_from_tags(self):
         tag = self.get_tag_info()
         for a in self.agents_ref:
-            data = tag.get(a.id)
-            if data and "grid_position" in data:
-                a.start = tuple(data["grid_position"])
+            info = tag.get(a.id)
+            if info and "grid_position" in info:
+                a.start = tuple(info["grid_position"])
 
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
+    # ---- CBS 실행 + 명령 전송 (단일 트리거 지점) ----
     def _plan_and_send(self, grid, res):
-        waiters_ids = set(res.get("waiters", set()))
-        ready_ids = res.get("ready")
+        # A) 모드 결과 정규화
+        waiters_ids  = set(res.get("waiters", set()))
+        waiters_ids |= set(self.ctx.get("_aligning", set()))
+        ready_ids    = res.get("ready")  # 없으면 전체 start!=goal 대상
         waiter_cells = set(res.get("waiter_cells", set()))
 
+        # B) 목표 누락/부적격 에이전트는 자동 waiter로 편입
         inferred_waiters = set()
         for a in self.agents_ref:
             bad = (not a.start) or (not a.goal) or (a.start == a.goal)
             if bad:
                 inferred_waiters.add(a.id)
-                if a.start:
-                    waiter_cells.add(a.start)
+                if a.start: waiter_cells.add(a.start)
 
         waiters_ids |= inferred_waiters
 
+        # C) 그리드 증강
         aug = grid.copy()
         for (r, c) in waiter_cells:
             if 0 <= r < aug.shape[0] and 0 <= c < aug.shape[1]:
                 aug[r, c] = 1
 
-        moving = [a for a in self.agents_ref if (
-            a.id not in waiters_ids
-            and a.start and a.goal
-            and a.start != a.goal
-            and (ready_ids is None or a.id in ready_ids)
-        )]
+        # D) CBS 대상(moving) 확정: ready가 있으면 그 집합만, 없으면 (start!=goal) 전체에서 waiter 제외
+        def movable(a):
+            if a.id in waiters_ids and (not a.goal or a.start == a.goal):
+                return False
+            if not (a.start and a.goal): return False
+            if a.start == a.goal: return False
+            if ready_ids is not None and a.id not in ready_ids: return False
+            return True
 
+        reasons = {}
+        for a in self.agents_ref:
+            r = []
+            if a.id in waiters_ids: r.append("waiter")
+            if not a.start:         r.append("no-start")
+            if not a.goal:          r.append("no-goal")
+            if a.start and a.goal and a.start == a.goal: r.append("start==goal")
+            if ready_ids is not None and a.id not in ready_ids: r.append("not-in-ready")
+            reasons[a.id] = {"start": a.start, "goal": a.goal, "flags": r}
+
+        # moving 산출 후, 비었으면 상세 이유 출력
+        moving = [a for a in self.agents_ref if (
+            a.id not in waiters_ids and a.start and a.goal and a.start != a.goal and
+            (ready_ids is None or a.id in ready_ids)
+        )]
         if not moving:
-            print("[Scenario] No moving agents.")
+            print("[Scenario] 움직일 로봇 없음 / reasons=", reasons)
             return
 
+        # 3) CBS 실행
         try:
             pf = self.pathfinder_factory(aug)
             solved_agents = pf.compute_paths(moving)
         except Exception as e:
-            print(f"[CBS] Error: {e}")
+            print(f"[CBS] 예외 발생: {e}. 이번 턴을 스킵합니다.")
             return
-
         if not solved_agents:
-            print("[CBS] No paths")
+            print("[CBS] 경로가 생성되지 않았습니다(None/empty).")
             return
 
+        # 4) 시각화용 paths 갱신
         self.paths_ref.clear()
         for sa in solved_agents:
             p = sa.get_final_path()
             if p:
                 self.paths_ref.append(p)
 
+        # 5) 명령 생성 + 전송
         cmd_map: Dict[str, List[str]] = {}
         step_cell_plan: Dict[int, Dict[str, Dict[str, Cell]]] = {}
-
         for sa in solved_agents:
             path = sa.get_final_path()
             if not path or len(path) < 2:
                 continue
-
             hd0 = self._initial_hd_hint.pop(sa.id, None)
             if hd0 is None:
                 hd0 = self.get_initial_hd(sa.id)
             cmd_objs = self.path_to_commands(path, hd0)
             cmds = [c["command"] for c in cmd_objs]
-
-            rid = str(sa.id)
-            cmd_map[rid] = cmds
-
-            for i in range(len(path) - 1):
-                step_cell_plan.setdefault(i, {})
-                step_cell_plan[i][rid] = {"src": tuple(path[i]),
-                                          "dst": tuple(path[i+1])}
+            if cmds:
+                rid = str(sa.id)
+                cmd_map[rid] = cmds
+                for i in range(len(path) - 1):
+                    step_cell_plan.setdefault(i, {})
+                    step_cell_plan[i][rid] = {"src": tuple(path[i]), "dst": tuple(path[i+1])}
 
         if cmd_map:
-            print("[Scenario] Sending commands:", {k:v for k,v in cmd_map.items() if v})
-            self._active_step_plan = step_cell_plan
-            self._active_step_count = (max(step_cell_plan.keys()) + 1)
+            print("[Scenario] 계산된 경로를 로봇에게 전송:", {k: v for k, v in cmd_map.items() if v})
+            self._active_step_plan = step_cell_plan or {}
+            self._active_step_count = (max(step_cell_plan.keys()) + 1) if step_cell_plan else 0
             self.controller.start_sequence(cmd_map, step_cell_plan=step_cell_plan)
+        else:
+            print("[Scenario] 유효한 명령이 없습니다.")
 
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
+    # runstate 빌드
     def _build_runstate(self) -> Dict[int, dict]:
         tag = self.get_tag_info()
-        rs: Dict[int, dict] = {}
-        has_is_exec = hasattr(self.controller, "is_executing")
+        rs = {}
+        has_exec = hasattr(self.controller, "is_executing")
 
         for a in self.agents_ref:
             rid = a.id
-            if has_is_exec:
+            if has_exec:
                 try:
                     executing = self.controller.is_executing(rid)
                 except Exception:
@@ -341,176 +384,142 @@ class ScenarioManager:
                 "start": a.start,
                 "goal": a.goal,
                 "tag": info,
-                "dir_aligned_recent": (
-                    hasattr(self.controller, "aligned_recently")
-                    and self.controller.aligned_recently(rid, within_sec=0.3)
-                ),
             }
         return rs
 
-    # --------------------------------------------------------
+    # ---------------------------------------------------------------
     def on_robot_complete(self, rid: str):
         if not self.enabled:
             return
-
-        rid_int = int(rid)
-
-        # ⭐ 도착 플래그 ON
-        self._sequence_done_flag[rid_int] = True
-
         self._sync_starts_from_tags()
         rs = self._build_runstate()
 
         if hasattr(self.mode, "on_robot_complete"):
             res = self.mode.on_robot_complete(
-                rid_int,
+                int(rid),
                 tag_info=self.get_tag_info(), grid=self.get_grid(),
                 agents=self.agents_ref, ctx=self.ctx, runstate=rs
             )
         else:
-            res = {"replan": False}
-
-        if res.get("replan"):
+            res = None
+        
+        if res and res.get("replan"):
             self.controller.request_pause_on_step_boundary()
             self._replan_requested = True
 
-    # ============================================================
-    #  UI STATUS 계산 (Status column)
-    # ============================================================
-    def compute_robot_status(self, rid: int, mode_result: dict) -> str:
-        rs = self._last_runstate
-        rstate = rs.get(rid, {})
+        # ★ UI 업데이트
+        self._update_ui_state(rs)
 
-        if mode_result.get("replan", False):
-            return "REPLANNING"
+    # ---------------------------------------------------------------
+    # 📌 번호키
+    def on_number_key(self, rid: int):
+        if not self.enabled:
+            return
 
-        if rid in (mode_result.get("align_center", set()) or set()):
-            return "ALIGNING"
-        if rid in (mode_result.get("align_direction", set()) or set()):
-            return "ALIGNING"
+        self._sync_starts_from_tags()
+        rs = self._build_runstate()
 
-        if rid in (mode_result.get("waiters", set()) or set()):
-            return "WAITING"
+        res = None
+        if hasattr(self.mode, "on_number_key"):
+            res = self.mode.on_number_key(rid, agents=self.agents_ref, ctx=self.ctx)
+        elif hasattr(self.mode, "on_home_key"):
+            res = self.mode.on_home_key(rid, agents=self.agents_ref, ctx=self.ctx)
 
-        if self._sequence_done_flag.get(rid, False):
-            return "ARRIVED"
-
-        executing = rstate.get("executing")
-        has_goal  = rstate.get("has_goal")
-        start     = rstate.get("start")
-        goal      = rstate.get("goal")
-
-        if executing and has_goal and start and goal and (tuple(start) != tuple(goal)):
-            return "MOVING"
-
-        # RETURNING / AT_HOME optional modes
-        if hasattr(self.mode, "order_to_home"):
-            if (rid, goal) in (self.mode.order_to_home or set()):
-                return "RETURNING"
-
-        if hasattr(self.mode, "home_set"):
-            if rid in self.mode.home_set:
-                return "AT_HOME"
-
-        return "IDLE"
-
-    # ============================================================
-    #  UI PACKET EXPORT
-    # ============================================================
-    def export_robot_ui_state(self, mode_result: dict):
-        from OpenCV.code.ui_bridge import FrameBus
-
-        agents = self.agents_ref
-        agent_pos = FrameBus.get_agent_states()
-        agent_goal = FrameBus.get_goal_positions()
-
-        ui_state = {}
-
-        for a in agents:
-            rid = a.id
-
-            if hasattr(self.mode, "get_current_order_for"):
-                num = self.mode.get_current_order_for(rid)
+        if res and res.get("replan"):
+            if getattr(self.controller, "active", False):
+                self.controller.request_pause_on_step_boundary()
+                self._replan_requested = True
             else:
-                num = "-"
+                self._sync_starts_from_tags()
+                self._plan_and_send(self.get_grid(), res)
 
-            pos  = agent_pos.get(rid, None)
-            goal = agent_goal.get(rid, None)
-            status = self.compute_robot_status(rid, mode_result)
+        # ★ UI 업데이트
+        self._update_ui_state(rs)
 
-            ui_state[rid] = {
-                "num": num,
-                "pos": pos,
-                "goal": goal,
-                "status": status,
-            }
+    # ---------------------------------------------------------------
+    # ⭐ UI 연동 부분 (가장 중요)
+    # ---------------------------------------------------------------
+    def _update_ui_state(self, runstate: Dict[int, dict]):
+        """FrameBus로 로봇 상태 및 RestaurantMode 주문 상태를 모두 전달하는 함수."""
 
-        FrameBus.set_robot_ui_state(ui_state)
-
-    # ============================================================
-    def push_order_history(self, rid: int, order_id, goal, status: str):
-        ts = time.time()
-        self._pending_orders.append({
-            "rid": rid,
-            "order_id": order_id,
-            "goal": goal,
-            "status": status,
-            "timestamp": ts,
-        })
-
-    # ============================================================
-    #  UI → 호출용 상태 패키지
-    # ============================================================
-    def get_mode_ui_state(self, *, drain_new: bool = False) -> dict:
-
-        state = {
-            "agents": {},
-            "scenario_status": "RUNNING" if self.enabled else "PAUSED",
-            "mode": self.mode.name if self.mode else None,
-        }
+        ui_dict = {}
 
         for a in self.agents_ref:
             rid = a.id
-            cur = tuple(a.start) if a.start else None
-            goal = tuple(a.goal) if a.goal else None
-            rs = self._last_runstate.get(rid, {})
-            executing = rs.get("executing")
+            st = runstate.get(rid, {})
+            status = self._compute_status_ui(rid, st)
 
-            state["agents"][rid] = {
-                "pos": cur,
-                "goal": goal,
-                "status": self.compute_robot_status(rid, {}),
+            ui_dict[rid] = {
+                "num": f"#{rid}",
+                "pos": str(st.get("start")),
+                "goal": str(st.get("goal")),
+                "status": status,
             }
 
-        if drain_new:
-            state["new_orders"] = list(self._pending_orders)
-            self._pending_orders.clear()
-        else:
-            state["new_orders"] = []
+        # 로봇 상태 push
+        FrameBus.set_robot_ui_state(ui_dict)
 
-        return state
+        # RestaurantMode 상태 push
+        order_state = self.get_mode_ui_state(drain_new=True)
+        FrameBus.set_scenario_order_state(order_state)
+        
+    
+    # ---------------------------------------------------------------
+    def _compute_status_ui(self, rid: int, st: dict) -> str:
+        """UI에 표시될 readable 로봇 상태 결정."""
+        if st.get("executing"):
+            return "MOVING"
+        if st.get("goal") and st.get("start") == st.get("goal"):
+            return "ARRIVED"
+        if not st.get("goal"):
+            return "IDLE"
+        return "WAITING"
+
+    # ---------------------------------------------------------------
+    def get_mode_ui_state(self, *, drain_new: bool = True):
+        """RestaurantMode 전용 UI export"""
+        try:
+            from OpenCV.code.scenario.RestaurantMode import RestaurantMode
+            if isinstance(self.mode, RestaurantMode):
+                return self.mode.export_ui_state(clear_new=drain_new)
+        except Exception as e:
+            print(f"[Scenario] get_mode_ui_state ERROR: {e}")
+        return {}
+    
+    def _handle_mode_result(self, ret, rs):
+        if not ret:
+            return
+
+        # align_center / align_direction 처리
+        if ret.get("align_center"):
+            self.controller.run_center_align(ret["align_center"], do_release=False)
+
+        if ret.get("align_direction"):
+            self.controller.run_direction_align(ret["align_direction"], do_release=False)
+
+        # CBS 재계획 요청
+        if ret.get("replan", False):
+            self._trigger_replan(rs)
 
 
 
+# ===================================================================
+# BaseMode 
+# ===================================================================
 
 
-# ============================================================
-# BaseMode
-# ============================================================
 class BaseMode:
     name = "Base"
 
+    # === 표준 훅: 필요 없으면 아무 것도 안 함 ===
     def enter(self, *, tag_info, grid, agents, ctx, runstate): pass
     def exit(self, *, tag_info, grid, agents, ctx, runstate): pass
-    def tick(self, *, tag_info, grid, agents, ctx, runstate) -> ModeResult | None:
-        return None
-    def on_sequence_complete(self, *, tag_info, grid, agents, ctx, runstate) -> ModeResult | None:
-        return None
-    def on_robot_complete(self, rid, *, tag_info, grid, agents, ctx, runstate) -> ModeResult | None:
-        return None
-    def on_alignment_complete(self, rid, *, tag_info, grid, agents, ctx, runstate) -> ModeResult | None:
-        return None
+    def tick(self, *, tag_info, grid, agents, ctx, runstate) -> ModeResult|None: return None
+    def on_sequence_complete(self, *, tag_info, grid, agents, ctx, runstate) -> ModeResult|None: return None
+    def on_robot_complete(self, rid, *, tag_info, grid, agents, ctx, runstate) -> ModeResult|None: return None
+    def on_alignment_complete(self, rid, *, tag_info, grid, agents, ctx, runstate) -> ModeResult|None: return None
 
+    # === 공통 유틸 ===
     def get_agent_ctx(self, ctx: dict, rid: int) -> dict:
         ctx.setdefault("agents", {})
         return ctx["agents"].setdefault(str(rid), {})
@@ -521,9 +530,10 @@ class BaseMode:
     def is_idle(self, runstate: dict, rid: int, frames: int = 8) -> bool:
         st = runstate.get(rid) or runstate.get(str(rid))
         if not st: return False
+        # idle_frames가 없으면 executing만으로 판단(필요 시 나중에 누적 프레임을 넣어도 됨)
         return (st.get("executing") is False) and (st.get("idle_frames", 999) >= frames)
 
-    def occupied_from_tags(self, tag_info: dict) -> set[Tuple[int,int]]:
+    def occupied_from_tags(self, tag_info: dict) -> set[tuple[int,int]]:
         occ = set()
         for rid, dat in tag_info.items():
             gp = dat.get("grid_position")
@@ -531,34 +541,32 @@ class BaseMode:
                 occ.add((gp[0], gp[1]))
         return occ
 
-    def collect_forbidden_cells(self, agents, tag_info) -> set[Tuple[int,int]]:
+    def collect_forbidden_cells(self, agents, tag_info) -> set[tuple[int,int]]:
         forb = set()
         for a in agents:
-            if a.start:
-                forb.add(tuple(a.start))
-            if a.goal:
-                forb.add(tuple(a.goal))
+            if a.start: forb.add(tuple(a.start))
+            if a.goal:  forb.add(tuple(a.goal))
         forb |= self.occupied_from_tags(tag_info)
         return forb
 
-    def sample_free_goal(self, grid, forbidden: set[Tuple[int,int]]):
+    def sample_free_goal(self, grid, forbidden: set[tuple[int,int]]):
+        # grid: 0 통과 가능
         H, W = len(grid), len(grid[0])
-        candidates = [(r, c) for r in range(H) for c in range(W)
-                      if grid[r][c] == 0 and (r, c) not in forbidden]
+        candidates = [(r,c) for r in range(H) for c in range(W) if grid[r][c] == 0 and (r,c) not in forbidden]
         return random.choice(candidates) if candidates else None
 
     def result(self, *, replan=False, ready=None, waiters=None, waiter_cells=None,
                align_center=None, align_direction=None, reason=None) -> ModeResult:
         r = ModeResult()
         if replan: r["replan"] = True
-        if ready: r["ready"] = list(ready)
+        if ready:  r["ready"] = list(ready)
         if waiters: r["waiters"] = list(waiters)
         if waiter_cells: r["waiter_cells"] = list(waiter_cells)
         if align_center: r["align_center"] = set(align_center)
         if align_direction: r["align_direction"] = set(align_direction)
         if reason: r["reason"] = reason
         return r
-
+    
     def ensure_agent_ctx(self, ctx: dict, rid: int) -> dict:
         s = ctx.setdefault(rid, {})
         s.setdefault("init_done", False)

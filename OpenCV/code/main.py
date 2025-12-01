@@ -65,7 +65,7 @@ ROBOT_HOME_POSITIONS = {
 MODE_FACTORY = {
     "test": lambda: TestMode(),
     "restaurant": lambda: RestaurantMode(
-        manager = scenario,
+        
         home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid),
         order_span_sec=(0, 30),
     ),
@@ -782,9 +782,13 @@ def main():
             FrameBus.set_mode(name) # UI에 현재 모드명 전달
             print(f"[UI][Scenario] mode ← {name} (실행상태는 유지)")
 
-        elif cmd == "toggle_scenario_run":           # 키: Spacebar
-            scenario.toggle_enabled()
-            print(f"[UI][Scenario] 실행 상태: {'ON' if scenario.enabled else 'OFF'}")
+        elif cmd == "scenario_run":
+            scenario.enabled = True
+            print("[UI] 시나리오 실행")
+
+        elif cmd == "scenario_stop":
+            scenario.enabled = False
+            print("[UI] 시나리오 정지")
 
         elif cmd == "resume":                        # 키: 'y'
             targets = sorted(SELECTED_RIDS) if SELECTED_RIDS else list(PRESET_IDS)
@@ -840,11 +844,10 @@ def main():
         draw_paths(vis, paths)
         draw_agent_points(vis, agents)
         manual.draw_overlay(vis)  # ← 수동 경로 오버레이
-        ui_state = FrameBus.get_robot_ui_state()
-
+        ui_state = scenario.get_mode_ui_state(drain_new=True)
         
         if ui_state:
-            show_orders_text_panel(ui_state)
+            FrameBus.set_robot_ui_state(ui_state)
              
         cv2.imshow("CBS Grid", vis)
         cv2.imshow("Video_display", frame)
@@ -887,9 +890,17 @@ def main():
         elif key == ord('a'):
             send_release_all(client, PRESET_IDS)
             controller.run_center_align(PRESET_IDS, do_release=False)
+        
         # 숫자키로 대상 선택/토글 (예: 1~9)
         elif key in tuple(ord(str(i)) for i in range(1, 10)):
-            handle_number_key_unified(key)
+            # 1) 시나리오 모드인지 확인
+            if isinstance(scenario.mode,(RestaurantMode, TestMode, RandomMode)):
+                
+                scenario.on_number_key(rid)
+    
+            else:
+                # → 단일제어 (로봇 선택 + 그리드 목표 설정)
+                handle_number_key_unified(key)
 
         # 선택 로봇 정지 (그냥 누르면 전체 정지)
         elif key == ord('t'):
@@ -931,7 +942,7 @@ def main():
                 controller.run_align_sequence(waiter_ids, do_release=False)
 
             # 4) ready만 대상으로 CBS 경로 계산&송신
-            #    compute_cbs()는 대기자를 장애물로 올려서 경로를 짬
+            #compute_cbs()는 대기자를 장애물로 올려서 경로를 짬
             compute_cbs()
 
         # 수동 모드

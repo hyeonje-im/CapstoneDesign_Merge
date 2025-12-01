@@ -197,15 +197,15 @@ class FrameBus:
 
     _selected_robot = None
 
-    @staticmethod
-    def set_selected_robot(rid):
-        global _selected_robot
-        _selected_robot = rid
+    @classmethod
+    def set_selected_robot(cls, rid):
+        with cls._lock:
+            cls._selected_robot = rid
 
-    @staticmethod
-    def get_selected_robot():
-        global _selected_robot
-        return _selected_robot
+    @classmethod
+    def get_selected_robot(cls):
+        with cls._lock:
+            return cls._selected_robot
     
     # ====================
     # --- Robot UI State ---
@@ -236,6 +236,18 @@ class FrameBus:
     @classmethod
     def clear_order_history(cls):
         cls._order_history.clear()
+
+    _scenario_order_state = {}
+
+    @classmethod
+    def set_scenario_order_state(cls, state: dict):
+        with cls._lock:
+            cls._scenario_order_state = state.copy()
+
+    @classmethod
+    def get_scenario_order_state(cls):
+        with cls._lock:
+            return cls._scenario_order_state.copy()
 
 
     # ===================
