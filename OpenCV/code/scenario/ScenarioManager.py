@@ -83,6 +83,7 @@ class ScenarioManager:
 
         self._active_step_plan = {}
         self._active_step_count = 0
+        self._last_mode_result: dict = {}
 
         # Controller 콜백 등록
         controller.set_alignment_completion_callback(self.on_align_complete)
@@ -183,6 +184,7 @@ class ScenarioManager:
             tag_info=tag, grid=grid, agents=self.agents_ref,
             ctx=self.ctx, runstate=rs
         )
+        self._last_mode_result = res or {}
 
         # replan 처리
         if res and res.get("replan"):
@@ -232,6 +234,7 @@ class ScenarioManager:
             tag_info=self.get_tag_info(), grid=self.get_grid(),
             agents=self.agents_ref, ctx=self.ctx, runstate=rs
         ) or {}
+        self._last_mode_result = res or {}
 
         should_replan = self._replan_requested or res.get("replan", False)
         if not should_replan:
@@ -403,6 +406,8 @@ class ScenarioManager:
         else:
             res = None
         
+        self._last_mode_result = res or {}
+        
         if res and res.get("replan"):
             self.controller.request_pause_on_step_boundary()
             self._replan_requested = True
@@ -436,34 +441,34 @@ class ScenarioManager:
         # ★ UI 업데이트
         self._update_ui_state(rs)
 
-    # ---------------------------------------------------------------
-    # ⭐ UI 연동 부분 (가장 중요)
-    # ---------------------------------------------------------------
     def _update_ui_state(self, runstate: Dict[int, dict]):
-        """FrameBus로 로봇 상태 및 RestaurantMode 주문 상태를 모두 전달하는 함수."""
-
+        """FrameBus로 로봇 상태 + 시나리오 주문 상태를 모두 내려보내는 함수."""
         ui_dict = {}
+
+        # ★★★ 최근 모드 결과 가져오기
+        mode_result = getattr(self, "_last_mode_result", {})
 
         for a in self.agents_ref:
             rid = a.id
             st = runstate.get(rid, {})
-            status = self._compute_status_ui(rid, st)
+
+            # ★★★ 여기서 상태 계산 함수를 사용
+            status = self.compute_robot_status(rid, mode_result)
 
             ui_dict[rid] = {
                 "num": f"#{rid}",
-                "pos": str(st.get("start")),
-                "goal": str(st.get("goal")),
+                "pos": st.get("start"),
+                "goal": st.get("goal"),
                 "status": status,
             }
 
-        # 로봇 상태 push
+        # 로봇 상태 UI로 전송
         FrameBus.set_robot_ui_state(ui_dict)
 
-        # RestaurantMode 상태 push
+        # RestaurantMode 주문 상태도 같이 전송
         order_state = self.get_mode_ui_state(drain_new=True)
         FrameBus.set_scenario_order_state(order_state)
-        
-    
+
     # ---------------------------------------------------------------
     def _compute_status_ui(self, rid: int, st: dict) -> str:
         """UI에 표시될 readable 로봇 상태 결정."""
@@ -474,7 +479,51 @@ class ScenarioManager:
         if not st.get("goal"):
             return "IDLE"
         return "WAITING"
+    def get_robot_position(self, rid: int):
+        """로봇의 현재 시작 위치(start)를 UI용으로 반환."""
+        rs = self._build_runstate()
+        st = rs.get(rid)
+        if not st:
+            return None
+        return st.get("start")
 
+    def get_robot_goal(self, rid: int):
+        """로봇의 현재 목표(goal)를 UI용으로 반환."""
+        rs = self._build_runstate()
+        st = rs.get(rid)
+        if not st:
+            return None
+        return st.get("goal")
+
+    def compute_robot_status(self, rid: int, mode_result: dict) -> str:
+        """RestaurantMode에서 오는 mode_result + runstate 기준으로 상태 계산"""
+
+        rs = self._build_runstate()
+        st = rs.get(rid, {})
+
+        # 1) ALIGNING 우선
+        if mode_result:
+            if rid in (mode_result.get("align_center", set()) or set()):
+                return "ALIGNING"
+            if rid in (mode_result.get("align_direction", set()) or set()):
+                return "ALIGNING"
+
+        # 2) WAITING
+        if mode_result and rid in (mode_result.get("waiters", set()) or set()):
+            return "WAITING"
+
+        # 3) 도착 상태
+        start = st.get("start")
+        goal = st.get("goal")
+        if start and goal and start == goal:
+            return "ARRIVED"
+
+        # 4) 실행 중
+        if st.get("executing"):
+            return "MOVING"
+
+        # 5) 기본값
+        return "IDLE"
     # ---------------------------------------------------------------
     def get_mode_ui_state(self, *, drain_new: bool = True):
         """RestaurantMode 전용 UI export"""

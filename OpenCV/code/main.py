@@ -651,7 +651,6 @@ def main():
         # =============================
         FrameBus.set_video(frame)
         FrameBus.set_grid(vis)
-        
         # -------------------------------
         # 🔥 FrameBus로 UI 동기화 보내기
         # -------------------------------
@@ -828,10 +827,12 @@ def main():
         elif cmd == "solver_next":
             _SOLVER_IDX = (_SOLVER_IDX + 1) % len(SOLVER_CHOICES)
             print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+            FrameBus.set_solver_type(current_solver())
 
         elif cmd == "solver_prev":
             _SOLVER_IDX = (_SOLVER_IDX - 1) % len(SOLVER_CHOICES)
             print(f"[UI][MAPF] solver_type = {current_solver()} (disjoint={DISJOINT})")
+            
 
         elif cmd == "toggle_disjoint":
             DISJOINT = not DISJOINT

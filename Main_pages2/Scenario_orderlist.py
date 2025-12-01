@@ -210,24 +210,45 @@ class ScenarioOrderList(BoxLayout):
     # ====================================================
     def update_from_framebus(self, dt):
         ui_state = FrameBus.get_robot_ui_state()
+        order_state = FrameBus.get_scenario_order_state()
+
         if not ui_state:
             return
-        
-        # ID1 / ID2 / ID3
+
+        # --- ID1 / ID2 / ID3 ---
         for rid, col in self.col_widgets.items():
             col.list_layout.clear_widgets()
 
             robot = ui_state.get(rid)
-            if not robot:
-                continue
+            orders = order_state.get(rid) if order_state else None
 
-            num = str(robot.get("num", "-"))
-            pos = str(robot.get("pos", "-"))
-            goal = str(robot.get("goal", "-"))
-            status = robot.get("status", "IDLE")
+        # -------------------------
+        # 1) 로봇 기본 상태 1줄 표시
+        # -------------------------
+            if robot:
+                num = str(robot.get("num", "-"))
+                pos = str(robot.get("pos", "-"))
+                goal = str(robot.get("goal", "-"))
+                status = robot.get("status", "IDLE")
 
-            row = OrderRowWidget(num=num, pos=pos, goal=goal, status=status)
-            col.list_layout.add_widget(row)
+                row = OrderRowWidget(num=num, pos=pos, goal=goal, status=status)
+                col.list_layout.add_widget(row)
+
+        # -------------------------
+        # 2) RestaurantMode 주문 목록 표시
+        # -------------------------
+            if orders:
+                for od in orders:  # od는 dict
+                    od_num   = f"Order {od.get('order_id', '-')}"
+                    od_pos   = str(od.get("start", "-"))
+                    od_goal  = str(od.get("goal", "-"))
+                    od_stat  = od.get("status", "-")
+
+                    od_row = OrderRowWidget(
+                        num=od_num, pos=od_pos, goal=od_goal, status=od_stat
+                    )
+                    col.list_layout.add_widget(od_row)
+
 
     # -----------------------
     # 화면 전환

@@ -1,5 +1,19 @@
-import sys
 import os
+
+# 펜/스타일러스/터치 입력 완전 비활성화
+os.environ["KIVY_DISABLE_PEN"] = "1"
+os.environ["KIVY_DISABLE_WIN_PEN"] = "1"
+os.environ["KIVY_DISABLE_WM_TOUCH"] = "1"
+
+# 입력 프로바이더를 마우스만 사용하도록 강제
+os.environ["KIVY_INPUT_MOTION_EVENTS"] = "mtdev,"
+os.environ["KIVY_INPUT_PROVIDERS"] = "mouse"
+
+# 기타 안정화 옵션
+os.environ["KIVY_NO_ARGS"] = "1"
+os.environ["KIVY_WINDOW"] = "sdl2"
+
+import sys
 import threading
 from kivy.app import App
 from kivy.core.window import Window

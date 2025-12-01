@@ -14,6 +14,9 @@ class GroupBox(BoxLayout):
     def __init__(self, title="", **kwargs):
         super().__init__(orientation="vertical", padding=5, spacing=5, **kwargs)
 
+        self.current_scenario_mode = "Idle"
+        self.current_solver = "CBS"
+
         # 배경
         with self.canvas.before:
             Color(0x25/255, 0x28/255, 0x3B/255, 1)
@@ -145,23 +148,17 @@ class ScenarioCenterWidget(BoxLayout):
         # 하단 전체 추가
         self.add_widget(upper)
         self.add_widget(lower)
+
+
+        Clock.schedule_interval(self.update_from_backend, 0.1)
         
 
         
 
 
     # ================= Helper Methods =================
-    def _update_bg(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
-        self.border.rectangle = (self.x, self.y, self.width, self.height)
-
-    
-
     
     def toggle_mode(self, *args):
-        self.current_scenario_mode = "Run" if self.current_scenario_mode == "Idle" else "Idle"
-        self.btn_mode.text = f"모드: {self.current_scenario_mode}"
         post("toggle_scenario_mode")
 
     def change_solver(self, direction):
@@ -176,3 +173,26 @@ class ScenarioCenterWidget(BoxLayout):
         self.current_solver = solvers[idx]
         self.lbl_solver.text = self.current_solver
         post(f"solver_{direction}")
+
+    def update_from_backend(self, dt):
+        """백엔드(FrameBus)에서 최신 값을 가져와 UI에 반영"""
+        # ---- 모드 상태 업데이트 ----
+        backend_mode = FrameBus.get_mode()
+        if backend_mode != self.current_scenario_mode:
+            self.current_scenario_mode = backend_mode
+            self.btn_mode.text = f"모드: {backend_mode}"
+
+        # ---- Solver 이름 반영 ----
+        solver = FrameBus.get_solver_type()
+        if solver and solver != self.current_solver:
+            self.current_solver = solver
+            self.lbl_solver.text = solver
+
+    def _update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+        self.border.rectangle = (self.x, self.y, self.width, self.height)
+
+    
+
+    

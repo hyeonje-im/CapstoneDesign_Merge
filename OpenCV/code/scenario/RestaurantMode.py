@@ -275,7 +275,7 @@ class RestaurantMode:
         return None
 
     # ------------------------------ 외부 이벤트 ------------------------------
-    def on_home_key(self, rid: int, *, agents: List, ctx: Dict[int, dict]):
+    def on_number_key(self, rid: int, *, agents: List, ctx: Dict[int, dict]):
         """
         메인에서 번호키가 눌렸을 때 호출.
         HOME 상태가 아니면 무시.
@@ -501,3 +501,27 @@ class RestaurantMode:
         self.table_chairs = chairs
         self._cfg_mtime = mtime
         print(f"[RestaurantMode] table_coords.json reloaded, {len(chairs)} chairs")
+
+
+    def get_ui_state(self, drain_new=False):
+        ui = {}
+
+        for rid in [1, 2, 3]:  # 로봇 ID
+            st = self.manager.compute_robot_status(rid, self._last_mode_result) \
+                if hasattr(self, "_last_mode_result") else "IDLE"
+
+            pos = self.manager.get_robot_position(rid)  # (row, col)
+            goal = self.manager.get_robot_goal(rid)
+
+            ui[rid] = {
+                "num": f"#{rid}",
+                "pos": str(pos) if pos else "-",
+                "goal": str(goal) if goal else "-",
+                "status": st
+            }
+
+        # 필요한 경우 new-orders drain 기능 처리
+        if drain_new:
+            self.new_orders = []
+        
+        return ui

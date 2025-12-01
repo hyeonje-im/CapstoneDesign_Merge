@@ -249,6 +249,15 @@ class FrameBus:
         with cls._lock:
             return cls._scenario_order_state.copy()
 
+    _current_solver_type = "CBS"
+
+    @staticmethod
+    def set_solver_type(s):
+        FrameBus._current_solver_type = s
+
+    @staticmethod
+    def get_solver_type():
+        return FrameBus._current_solver_type
 
     # ===================
     # UI → Backend 명령큐
