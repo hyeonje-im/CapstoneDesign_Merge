@@ -22,6 +22,7 @@ class ModeResult(TypedDict, total=False):
     waiter_cells: Set[Cell]
     align_center: Set[RobotId]
     align_direction: Set[RobotId]
+    ready_for_order: Dict[RobotId, bool]
 
 
 # -------------------------------------------------------------------
@@ -84,7 +85,8 @@ class ScenarioManager:
         self._active_step_plan = {}
         self._active_step_count = 0
         self._last_mode_result: dict = {}
-
+        self._last_runstate: Dict[int, dict] = {}
+        
         # Controller 콜백 등록
         controller.set_alignment_completion_callback(self.on_align_complete)
         controller.set_robot_completion_callback(self.on_robot_complete)
@@ -388,6 +390,7 @@ class ScenarioManager:
                 "goal": a.goal,
                 "tag": info,
             }
+        self._last_runstate = rs
         return rs
 
     # ---------------------------------------------------------------
@@ -418,28 +421,48 @@ class ScenarioManager:
     # ---------------------------------------------------------------
     # 📌 번호키
     def on_number_key(self, rid: int):
+        """UI에서 숫자키가 눌렸을 때 호출된다.
+        현재 모드가 on_number_key()를 지원하면 그걸 호출해 주문을 로봇에게 배정한다.
+        """
         if not self.enabled:
             return
 
+        # 1) 최신 위치 반영
         self._sync_starts_from_tags()
         rs = self._build_runstate()
 
+        # 2) 현재 모드가 숫자키를 지원하는지 확인
         res = None
         if hasattr(self.mode, "on_number_key"):
-            res = self.mode.on_number_key(rid, agents=self.agents_ref, ctx=self.ctx)
+            # RestaurantMode는 여기로 들어온다
+            res = self.mode.on_number_key(
+                rid,
+                agents=self.agents_ref,
+                ctx=self.ctx
+            )
         elif hasattr(self.mode, "on_home_key"):
-            res = self.mode.on_home_key(rid, agents=self.agents_ref, ctx=self.ctx)
+            # 예전 레거시 지원
+            res = self.mode.on_home_key(
+                rid,
+                agents=self.agents_ref,
+                ctx=self.ctx
+            )
 
+        # 3) 모드가 replan 요구하면 CBS 실행
         if res and res.get("replan"):
             if getattr(self.controller, "active", False):
+                # 실행 중이면 일단 스텝 경계에서 멈추고 재계획 예약
                 self.controller.request_pause_on_step_boundary()
                 self._replan_requested = True
             else:
+                # 즉시 재계획 가능
                 self._sync_starts_from_tags()
                 self._plan_and_send(self.get_grid(), res)
 
-        # ★ UI 업데이트
+        # 4) UI 업데이트
+        self._last_mode_result = res or {}
         self._update_ui_state(rs)
+
 
     def _update_ui_state(self, runstate: Dict[int, dict]):
         """FrameBus로 로봇 상태 + 시나리오 주문 상태를 모두 내려보내는 함수."""
@@ -447,19 +470,20 @@ class ScenarioManager:
 
         # ★★★ 최근 모드 결과 가져오기
         mode_result = getattr(self, "_last_mode_result", {})
-
+        ready_map = mode_result.get("ready_for_order", {}) 
         for a in self.agents_ref:
             rid = a.id
             st = runstate.get(rid, {})
 
             # ★★★ 여기서 상태 계산 함수를 사용
-            status = self.compute_robot_status(rid, mode_result)
+            status = self.compute_robot_status(rid, mode_result, runstate)
 
             ui_dict[rid] = {
                 "num": f"#{rid}",
                 "pos": st.get("start"),
                 "goal": st.get("goal"),
                 "status": status,
+                "ready_for_order": ready_map.get(rid, False),
             }
 
         # 로봇 상태 UI로 전송
@@ -495,11 +519,11 @@ class ScenarioManager:
             return None
         return st.get("goal")
 
-    def compute_robot_status(self, rid: int, mode_result: dict) -> str:
+    def compute_robot_status(self, rid: int, mode_result: dict, runstate: Dict[int, dict]) -> str:
         """RestaurantMode에서 오는 mode_result + runstate 기준으로 상태 계산"""
 
-        rs = self._build_runstate()
-        st = rs.get(rid, {})
+        st = runstate.get(rid, {})
+
 
         # 1) ALIGNING 우선
         if mode_result:
@@ -524,6 +548,20 @@ class ScenarioManager:
 
         # 5) 기본값
         return "IDLE"
+    def is_ready_for_order(self, rid: int, mode_result: dict, runstate: Dict[int, dict]) -> bool:
+        """
+        UI용 '다음 명령 받을 준비 되었는지' 플래그.
+        1순위: mode_result["ready_for_order"][rid]
+        2순위: runstate[rid]["ready_for_order"] (있다면)
+        """
+        if mode_result:
+            rfo = mode_result.get("ready_for_order")
+            if isinstance(rfo, dict) and rid in rfo:
+                return bool(rfo[rid])
+
+        st = runstate.get(rid, {})
+        return bool(st.get("ready_for_order", False))
+
     # ---------------------------------------------------------------
     def get_mode_ui_state(self, *, drain_new: bool = True):
         """RestaurantMode 전용 UI export"""

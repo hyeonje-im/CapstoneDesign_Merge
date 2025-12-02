@@ -219,8 +219,8 @@ class VisionSystem:
                     self.fps = 1.0 / time_diff
                 self.prev_tick = curr_tick
 
-            if self.frame_count % 10 == 0:
-                print(f"[FPS] {self.fps:.2f}")
+            # if self.frame_count % 10 == 0:
+            #     print(f"[FPS] {self.fps:.2f}")
 
 
         return {

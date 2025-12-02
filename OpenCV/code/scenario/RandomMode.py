@@ -1,47 +1,52 @@
+# RandomMode.py
+
+from __future__ import annotations
+
 import random
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-# Type aliases (kept loose to fit existing project types)
+# 타입 별칭
 Cell = Tuple[int, int]
 
-# The surrounding codebase provides these base classes / types:
-# - BaseMode: utilities like ensure_agent_ctx, occupied_from_tags, result(...)
-# - ModeResult: return envelope consumed by ScenarioManager
-# - Agent: carries .id, .start, .goal, .delay
-# They are intentionally not re-imported here to avoid circular imports.
 
-
-class RandomMode:  # inherits BaseMode at runtime in your project
-    name = "RandomMode"
+class RandomMode:
     """
     TestMode와 동일한 구동/콜백 흐름을 유지하면서,
     '목표를 찍는 방식'만 홈↔테이블(장애물) 인접 자유칸 규칙으로 바꾼 모드.
 
-    • 초기/유휴 배정: 홈이면 → 테이블 인접, 아니면 → 홈
-    • 도착 직후: on_sequence_complete()가 정렬 요청
-    • 정렬 완료: on_alignment_complete()에서 다음 목표 배정(홈이면 테이블 인접 / 아니면 홈)
-    • 개별 완료: on_robot_complete()에서도 TestMode와 동일 타이밍으로 다음 목표 배정
-    • 홈→테이블로 출발할 때만 a.delay = randint(0,3) 부여 (CBS가 지연을 경로에 반영)
-      테이블→홈은 a.delay = 0
-    • 홈이 없는 로봇은 homeless=True: 명령 미발송, 그 자리 한 칸 임시 장애물로만 취급
+    • 초기/유휴 배정: HOME이면 → 테이블 인접, 아니면 → HOME
+    • 도착 직후: on_sequence_complete() 가 정렬 요청
+    • 정렬 완료: on_alignment_complete() 에서 다음 목표 배정
+    • 개별 완료: on_robot_complete() 에서도 다음 목표 배정
+    • HOME→테이블 출발 때만 a.delay = randint(0,3) 부여
+      테이블→HOME은 a.delay = 0
+    • HOME이 없는 로봇은 homeless=True: 명령 미발송, 그 자리만 임시 장애물 취급
     """
 
-    # ---- Base utilities expected to exist on BaseMode ----
-    # ensure_agent_ctx(self, ctx, rid) -> dict
-    # occupied_from_tags(self, tag_info) -> Set[Cell]
-    # result(self, *, replan=False, waiters=None, waiter_cells=None,
-    #         align_center=None, align_direction=None, ready=None, reason="") -> ModeResult
+    # ---- Base utilities (BaseMode / ScenarioManager 쪽에서 제공된다고 가정) ----
+    # self.ensure_agent_ctx(ctx, rid) -> dict
+    # self.occupied_from_tags(tag_info) -> Set[Cell]
+    # self.result(... ) -> ModeResult
 
-    def __init__(self, *, idle_threshold_frames: int = 12, home_provider: Optional[callable] = None):
+    def __init__(
+        self,
+        *,
+        idle_threshold_frames: int = 12,
+        home_provider: Optional[callable] = None,
+    ):
+        # 위치가 idle_threshold_frames 프레임 동안 안 움직이면 "놀고 있다"라고 판정
         self.idle_thresh = idle_threshold_frames
+        # 외부(ScenarioManager)에서 각 로봇의 HOME 좌표를 받아오는 콜백
         self.home_provider = home_provider
 
-    # ----------------------------- Lifecycle -----------------------------
-    def enter(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]) -> None:
+    # ----------------------------- Lifecycle ----------------------------- #
+    def enter(self, *, tag_info, grid, agents, ctx, runstate):
         for a in agents:
             s = self.ensure_agent_ctx(ctx, a.id)
+
+            # 1) HOME 설정
             home_from_main = self.home_provider(a.id) if self.home_provider else None
             if home_from_main is not None:
                 s["home"] = tuple(home_from_main)
@@ -49,35 +54,58 @@ class RandomMode:  # inherits BaseMode at runtime in your project
             else:
                 s["home"] = None
                 s["homeless"] = True
-                a.goal = None  # 명령 미발송 대상
-            # 정렬/검증 상태 초기화
+
+            # 2) ★ 기존 목표/딜레이 전부 초기화
+            a.goal = None
+            try:
+                a.delay = 0
+            except Exception:
+                pass
+
+            # 3) 정렬/검증 상태 및 idle 상태 초기화
             s.pop("verifying", None)
             s.pop("verify_goal", None)
             s["last_pos"] = tuple(a.start) if a.start else None
             s["idle_frames"] = 0
-            s["hd_active"] = False   # 현재 홈출발 딜레이 세션 활성화 여부
-            s["hd_left"]   = 0
 
-    # ------------------------------ Helpers ------------------------------
+            # 4) HOME 출발 지연 번들 상태
+            s["hd_active"] = False
+            s["hd_left"] = 0
+
+            # 5) ★ TestMode와 동일한 초기화 플래그
+            s["init_done"] = False
+
+    # ------------------------------ Helpers ------------------------------ #
     def _neighbors4(self, r: int, c: int, H: int, W: int):
+        """4방향 인접 셀 생성기."""
         for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             rr, cc = r + dr, c + dc
             if 0 <= rr < H and 0 <= cc < W:
                 yield rr, cc
 
     def _pick_table_adjacent(self, grid: np.ndarray, forbidden: Set[Cell]) -> Optional[Cell]:
-        """장애물(=테이블) 셀의 4방 인접 자유칸 중 금지와 겹치지 않는 칸을 하나 고른다."""
+        """
+        장애물(=테이블) 셀의 4방 인접 자유칸 중, 금지(forbidden)에 없는 칸을 하나 고른다.
+        - grid[r,c] != 0 인 셀을 테이블로 보고, 그 4방향 중 grid==0 인 칸을 후보로 사용
+        """
         H, W = grid.shape
         tables_adj: List[List[Cell]] = []
+
         for r in range(H):
             for c in range(W):
                 if grid[r, c] == 0:
                     continue  # free는 테이블 아님
-                adj = [(rr, cc) for (rr, cc) in self._neighbors4(r, c, H, W) if grid[rr, cc] == 0]
+                adj = [
+                    (rr, cc)
+                    for (rr, cc) in self._neighbors4(r, c, H, W)
+                    if grid[rr, cc] == 0
+                ]
                 if adj:
                     tables_adj.append(adj)
+
         if not tables_adj:
             return None
+
         random.shuffle(tables_adj)
         for adj in tables_adj:
             cand = [p for p in adj if p not in forbidden]
@@ -85,174 +113,262 @@ class RandomMode:  # inherits BaseMode at runtime in your project
                 return random.choice(cand)
         return None
 
-    def _next_goal_for(self, a, grid: np.ndarray, forbidden: Set[Cell], ctx: Dict[int, dict]) -> Optional[Cell]:
+    def _next_goal_for(
+        self,
+        a,
+        grid: np.ndarray,
+        forbidden: Set[Cell],
+        ctx: Dict[int, dict],
+    ) -> Optional[Cell]:
+        """
+        "다음 목표" 규칙:
+        - HOME에 있으면: 테이블 인접 칸 중 하나
+        - HOME이 아니면: HOME 좌표
+        - 홈리스: None
+        """
         s = self.ensure_agent_ctx(ctx, a.id)
         if s.get("homeless"):
             return None
+
         cur = tuple(a.start) if a.start else None
         home = s.get("home")
+
         if home and cur == tuple(home):
-            return self._pick_table_adjacent(grid, forbidden)  # 홈이면 → 테이블 인접
+            # HOME이면 테이블 인접 칸으로
+            return self._pick_table_adjacent(grid, forbidden)
         else:
-            return tuple(home) if home else None               # 아니면 → 홈
+            # 그 외에는 HOME으로 복귀
+            return tuple(home) if home else None
 
-    # ------------------------------ Ticking ------------------------------
-    def tick(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
+    # ------------------------------ Ticking ------------------------------ #
+    def tick(self, *, tag_info, grid, agents, ctx, runstate):
         replan = False
-        waiters: Set[int] = set()       # 목표 없는(=진짜 waiter) 로봇만
-        waiter_cells: Set[Cell] = set() # 해당 로봇의 현재 셀을 막는다
+        waiters: Set[int] = set()
+        waiter_cells: Set[Cell] = set()
 
-        # 홈리스는 항상 목표 없음 → 차단 셀로만 올림
+        # 0) 홈리스는 항상 목표 없음 → 현재 위치를 임시 장애물로만 사용
         for a in agents:
             s = self.ensure_agent_ctx(ctx, a.id)
-            if s.get("homeless"):
-                if a.start:
-                    waiter_cells.add(tuple(a.start))
+            if s.get("homeless") and a.start:
+                waiter_cells.add(tuple(a.start))
                 waiters.add(a.id)
+
+        # 0-1) ★ 아직 init_done이 안 된 로봇이 있으면 → 초기 목표 부여 모드
+        initial_phase = any(
+            not (self.ensure_agent_ctx(ctx, a.id).get("init_done", False))
+            for a in agents
+        )
 
         occ = self.occupied_from_tags(tag_info)
         starts = {tuple(a.start) for a in agents if a.start}
         goals = {tuple(a.goal) for a in agents if a.goal}
-        homes = {tuple(self.ensure_agent_ctx(ctx, a.id).get("home"))
-                 for a in agents if self.ensure_agent_ctx(ctx, a.id).get("home")}
+        homes = {
+            tuple(self.ensure_agent_ctx(ctx, a.id).get("home"))
+            for a in agents
+            if self.ensure_agent_ctx(ctx, a.id).get("home")
+        }
 
         for a in agents:
             s = self.ensure_agent_ctx(ctx, a.id)
+
             if s.get("homeless"):
                 continue
 
             cur = tuple(a.start) if a.start else None
             last = s.get("last_pos")
-            s["idle_frames"] = (s.get("idle_frames", 0) + 1) if (cur is not None and last == cur) else 0
+            s["idle_frames"] = (
+                s.get("idle_frames", 0) + 1 if (cur is not None and last == cur) else 0
+            )
             s["last_pos"] = cur
-            executing = (runstate.get(a.id) or {}).get("executing", None)
-            is_idle_now = (executing is False) or (executing is None and s["idle_frames"] >= self.idle_thresh)
 
-            # TestMode와 동일: 도착 직후(=start==goal)에는 tick에서 새 목표를 찍지 않음 (정렬 먼저)
-            arrived = (a.start and a.goal and tuple(a.start) == tuple(a.goal))
+            executing = (runstate.get(a.id) or {}).get("executing", None)
+
+            if initial_phase:
+                # ★ 초기 단계에서는 idle 여부 상관없이 "새로 시작"이라고 보고 처리
+                is_idle_now = True
+            else:
+                is_idle_now = (executing is False) or (
+                    executing is None and s["idle_frames"] >= self.idle_thresh
+                )
+
+            arrived = bool(a.start and a.goal and tuple(a.start) == tuple(a.goal))
             if s.get("verifying") or arrived:
                 continue
 
-            # 아직 도착 전인데 목표가 없으면 초기/유휴 배정
+        # ================================
+        #     새 목표 생성 조건
+        # ================================
             if is_idle_now and not a.goal:
                 forbidden = set(starts) | set(goals) | set(occ) | set(homes)
                 ng = self._next_goal_for(a, grid, forbidden, ctx)
+
                 if ng is not None:
                     is_new_goal = (tuple(ng) != tuple(a.goal)) if a.goal else True
                     a.goal = ng
-                    at_home = (s.get("home") and cur == tuple(s["home"]))
+
+                    at_home = bool(s.get("home") and cur == tuple(s["home"]))
                     if at_home:
-                        # 홈에서 테이블로 '새 목표'를 받는 최초 순간에만 번들 생성
                         if is_new_goal and not s.get("hd_active", False):
                             s["hd_active"] = True
-                            s["hd_left"]   = random.randint(0, 3)
-                        # 매 계획 시 CBS에 남은 딜레이를 반영
+                            s["hd_left"] = random.randint(0, 3)
                         a.delay = int(s.get("hd_left", 0))
                     else:
-                        # 테이블→홈: 지연 없음, 홈-출발 번들 종료
                         a.delay = 0
                         s["hd_active"] = False
-                        s["hd_left"]   = 0
+                        s["hd_left"] = 0
+
                     goals.add(tuple(ng))
                     replan = True
-                
                 else:
-                    # 목표를 만들 수 없으면(테이블 인접 없음 등) → 임시 차단만
                     if a.start:
                         waiter_cells.add(tuple(a.start))
                         waiters.add(a.id)
 
+            # ★ 초기 단계였다면, 한 바퀴 돌고 나서 init_done 표시
+        if initial_phase:
+            for a in agents:
+                self.ensure_agent_ctx(ctx, a.id)["init_done"] = True
+
         if replan or waiters or waiter_cells:
-            return self.result(replan=replan, waiters=waiters, waiter_cells=waiter_cells, reason="idle")
+            return self.result(
+                replan=replan,
+                waiters=waiters,
+                waiter_cells=waiter_cells,
+                reason="init" if initial_phase else "idle",
+            )
         return None
 
-    # ------------------------------ Callbacks ----------------------------
-    def on_sequence_complete(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
-        """도착 로봇에 정렬을 요청(TestMode와 동일한 타이밍)."""
-        for a in agents:
-            s = self.ensure_agent_ctx(ctx, a.id)
-            if s.get("homeless"):
-                continue
-            if s.get("hd_active") and s.get("hd_left", 0) > 0:
-                cur  = tuple(a.start) if a.start else None
-                last = s.get("last_pos")
-                if cur is not None and last == cur:
-                    s["hd_left"] = max(0, int(s["hd_left"]) - 1)
-                    a.delay      = int(s["hd_left"])  # 다음 CBS에 반영되도록 최신값 유지
-
+    # ------------------------------ Callbacks ---------------------------- #
+    def on_sequence_complete(
+        self,
+        *,
+        tag_info: dict,
+        grid: np.ndarray,
+        agents: List,
+        ctx: Dict[int, dict],
+        runstate: Dict[int, dict],
+    ):
+        """
+        시퀀스 한 번 끝났을 때 호출.
+        - start == goal 인 로봇들에 대해 1회 중앙 + 방향 정렬을 요청하고,
+          alignment 콜백에서 실제 위치를 태그로 검증한 뒤 다음 목표를 부여.
+        """
         align_center: Set[int] = set()
         align_direction: Set[int] = set()
+
         for a in agents:
-            s = self.ensure_agent_ctx(ctx, a.id)
-            if s.get("homeless"):
-                continue
             if a.start and a.goal and tuple(a.start) == tuple(a.goal):
+                s = self.ensure_agent_ctx(ctx, a.id)
                 s["verifying"] = True
                 s["verify_goal"] = tuple(a.goal)
                 align_center.add(a.id)
                 align_direction.add(a.id)
+
         if align_center or align_direction:
-            return self.result(replan=False, align_center=align_center, align_direction=align_direction, reason="done")
+            return self.result(
+                replan=False,
+                align_center=align_center,
+                align_direction=align_direction,
+                reason="done",
+            )
         return None
 
-    def on_alignment_complete(self, rid: int, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
-        a = next((x for x in agents if x.id == rid), None)
-        if not a:
-            return None
-        s = self.ensure_agent_ctx(ctx, rid)
-        if s.get("homeless"):
-            return None
-
-        # 정렬 검증: 현 위치가 직전에 도착한 목표와 일치해야 함
-        if a.start and s.get("verify_goal") and tuple(a.start) == tuple(s["verify_goal"]):
-            s["verifying"] = False
-            s["verify_goal"] = None
-
-            # 다음 목표 배정 (홈↔테이블 인접 규칙)
-            occ = self.occupied_from_tags(tag_info)
-            starts = {tuple(x.start) for x in agents if x.start}
-            goals = {tuple(x.goal) for x in agents if x.goal}
-            homes = {tuple(self.ensure_agent_ctx(ctx, x.id).get("home"))
-                     for x in agents if self.ensure_agent_ctx(ctx, x.id).get("home")}
-            forbidden = set(starts) | set(goals) | set(occ) | set(homes)
-
-            cur = tuple(a.start) if a.start else None
-            at_home = s.get("home") and cur == tuple(s["home"])
-            ng = self._pick_table_adjacent(grid, forbidden) if at_home else (tuple(s["home"]) if s.get("home") else None)
-
-            if ng is not None:
-                is_new_goal = (tuple(ng) != tuple(a.goal)) if a.goal else True
-                a.goal = ng
-                if at_home:
-                    if is_new_goal and not s.get("hd_active", False):
-                        s["hd_active"] = True
-                        s["hd_left"]   = random.randint(0, 3)
-                    a.delay = int(s.get("hd_left", 0))
-                else:
-                    a.delay = 0
-                    s["hd_active"] = False
-                    s["hd_left"]   = 0
-                return self.result(replan=True, reason="align_ok_next")
-            else:
-                a.goal = None
-                waiters, waiter_cells = set(), set()
-                if a.start:
-                    waiters.add(a.id)
-                    waiter_cells.add(tuple(a.start))
-                return self.result(replan=False, waiters=waiters, waiter_cells=waiter_cells, reason="align_ok_no_goal")
-
-        # 검증 불일치: 재정렬 유도(TestMode와 동일)
-        s["verifying"] = True
-        s["verify_goal"] = tuple(a.goal) if a.goal else None
-        return self.result(replan=False, align_center={rid}, align_direction={rid}, reason="align_retry")
-
-    def on_robot_complete(self, rid: int, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
-        """TestMode와 동일: 개별 완료 시 바로 다음 목표를 배정하고 재계획.
-        (정렬 완료 콜백에서도 배정되므로, 환경/타이밍에 따라 둘 중 하나만 호출돼도 정상 진행)
+    def on_alignment_complete(
+        self,
+        rid: int,
+        *,
+        tag_info,
+        grid,
+        agents,
+        ctx,
+        runstate,
+    ):
+        """
+        특정 로봇(rid)에 대한 정렬(중앙+방향) 완료 콜백.
+        - 태그 위치와 verify_goal 을 비교해서 오차가 크면 같은 목표로 재계획.
+        - 일치하면 HOME↔테이블 인접 규칙으로 다음 목표를 바로 부여.
         """
         a = next((x for x in agents if x.id == rid), None)
         if not a:
             return None
+
+        s = self.ensure_agent_ctx(ctx, rid)
+        vgoal = s.get("verify_goal")
+        if not s.get("verifying") or vgoal is None:
+            return None
+
+        gp = tag_info.get(rid, {}).get("grid_position")
+        gp = tuple(gp) if gp is not None else None
+
+        # 1) 검증 실패 → 같은 목표로 재계획만
+        if gp != vgoal:
+            if a.goal != vgoal:
+                a.goal = vgoal
+            print(
+                f"[RandomMode] verify fail: rid={rid} gp={gp} vgoal={vgoal} → replan"
+            )
+            return self.result(replan=True, reason="verify_fail")
+
+        # 2) 검증 성공 → 다음 목표 배정
+        s["verifying"] = False
+        s["verify_goal"] = None
+
+        home = s.get("home")
+        cur = tuple(a.start) if a.start else None
+        at_home = bool(home and cur == tuple(home))
+
+        # forbidden 재계산
+        occ = self.occupied_from_tags(tag_info)
+        starts = {tuple(x.start) for x in agents if x.start}
+        goals = {tuple(x.goal) for x in agents if x.goal}
+        homes = {
+            tuple(self.ensure_agent_ctx(ctx, x.id).get("home"))
+            for x in agents
+            if self.ensure_agent_ctx(ctx, x.id).get("home")
+        }
+        forbidden = set(starts) | set(goals) | set(occ) | set(homes)
+
+        ng = self._next_goal_for(a, grid, forbidden, ctx)
+        if ng is not None:
+            is_new_goal = (tuple(ng) != tuple(a.goal)) if a.goal else True
+            a.goal = ng
+
+            if at_home:
+                if is_new_goal and not s.get("hd_active", False):
+                    s["hd_active"] = True
+                    s["hd_left"] = random.randint(0, 3)
+                a.delay = int(s.get("hd_left", 0))
+            else:
+                a.delay = 0
+                s["hd_active"] = False
+                s["hd_left"] = 0
+
+            print(f"[RandomMode] align done → next goal {ng}, delay={a.delay}")
+            return self.result(replan=True, reason="align_next_goal")
+        else:
+            a.goal = None
+            print(f"[RandomMode] align done but no next goal, rid={rid}")
+            return self.result(replan=True, reason="align_no_goal")
+
+    def on_robot_complete(
+        self,
+        rid: int,
+        *,
+        tag_info,
+        grid,
+        agents,
+        ctx,
+        runstate,
+    ):
+        """
+        개별 로봇 완료 콜백.
+        - TestMode에서 '한 로봇이 먼저 끝났을 때'와 동일 타이밍으로
+          다음 HOME↔테이블 인접 목표를 바로 부여.
+        """
+        a = next((x for x in agents if x.id == rid), None)
+        if not a or not a.start:
+            return None
+
         s = self.ensure_agent_ctx(ctx, rid)
         if s.get("homeless"):
             return None
@@ -260,119 +376,65 @@ class RandomMode:  # inherits BaseMode at runtime in your project
         occ = self.occupied_from_tags(tag_info)
         starts = {tuple(x.start) for x in agents if x.start}
         goals = {tuple(x.goal) for x in agents if x.goal}
-        homes = {tuple(self.ensure_agent_ctx(ctx, x.id).get("home"))
-                 for x in agents if self.ensure_agent_ctx(ctx, x.id).get("home")}
+        homes = {
+            tuple(self.ensure_agent_ctx(ctx, x.id).get("home"))
+            for x in agents
+            if self.ensure_agent_ctx(ctx, x.id).get("home")
+        }
         forbidden = set(starts) | set(goals) | set(occ) | set(homes)
 
         ng = self._next_goal_for(a, grid, forbidden, ctx)
         if ng is not None:
             is_new_goal = (tuple(ng) != tuple(a.goal)) if a.goal else True
             a.goal = ng
+
             cur = tuple(a.start) if a.start else None
-            at_home = s.get("home") and cur == tuple(s["home"])
+            at_home = bool(s.get("home") and cur == tuple(s["home"]))
             if at_home:
                 if is_new_goal and not s.get("hd_active", False):
                     s["hd_active"] = True
-                    s["hd_left"]   = random.randint(0, 3)
+                    s["hd_left"] = random.randint(0, 3)
                 a.delay = int(s.get("hd_left", 0))
             else:
                 a.delay = 0
                 s["hd_active"] = False
-                s["hd_left"]   = 0
+                s["hd_left"] = 0
+
             return self.result(replan=True, reason="robot_done")
         else:
             a.goal = None
             return self.result(replan=True, reason="robot_done_no_goal")
 
-    # ------------------------- BaseMode bridging -------------------------
-    # NOTE: In your actual codebase, RandomMode inherits BaseMode so these
-    # methods are available. If running standalone, you may need to mixin.
+    # ------------------------- BaseMode bridging ------------------------- #
+    # NOTE:
+    #  - 실제 프로젝트에서는 BaseMode를 상속해서 이 함수들이 이미
+    #    정의되어 있을 수 있음.
+    #  - 단독 실행/테스트 시에도 돌아가도록 여기서 최소구현을 넣어둠.
     def ensure_agent_ctx(self, ctx: Dict[int, dict], rid: int) -> dict:  # pragma: no cover
         if rid not in ctx:
             ctx[rid] = {}
         return ctx[rid]
 
     def occupied_from_tags(self, tag_info: dict) -> Set[Cell]:  # pragma: no cover
+        # 실제 프로젝트에서는 status=="On" 인 태그 위치만 사용할 수 있도록
+        # ScenarioManager 또는 BaseMode 쪽 구현을 쓰는 것이 더 안전함.
         return set(tag_info.get("occupied", []))
 
     def result(self, **kwargs):  # pragma: no cover
+        # ScenarioManager 쪽 ModeResult 규격과 맞게만 쓰면 됨.
         return kwargs
 
-
-    def exit(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]) -> None:
-        """
-        ScenarioManager가 모드 교체 전에 호출하는 종료 훅.
-        상태를 정리하고 외부 부작용은 만들지 않는다.
-        """
+    def exit(self, *, tag_info, grid, agents, ctx, runstate):
         for a in agents:
             s = self.ensure_agent_ctx(ctx, a.id)
-            # 정렬/검증 및 홈-출발 딜레이 번들 정리
             s.pop("verifying", None)
             s.pop("verify_goal", None)
             s["hd_active"] = False
             s["hd_left"] = 0
-            # 모드 종료 시, 딜레이는 CBS에 남기지 않도록 0으로 리셋
+            s["init_done"] = False   # 다음에 들어오면 다시 초기화
             try:
                 a.delay = 0
+                a.goal = None        # ★ 다음 모드가 재설정하게끔 비워줌
             except Exception:
                 pass
-
-        # =====================================================
-    #  UI로 내보낼 상태 패킷
-    # =====================================================
-    def export_ui_state(self, agents, ctx, runstate):
-        """
-        RandomMode는 주문 개념이 없으므로 num='-' 고정.
-        pos / goal / status 를 UI로 내보낸다.
-        """
-        state = {}
-
-        for a in agents:
-            rid = a.id
-            pos  = tuple(a.start) if a.start else None
-            goal = tuple(a.goal) if a.goal else None
-            status = self.compute_robot_status(rid, a, ctx, runstate)
-
-            state[rid] = {
-                "num": "-",     # 주문 없음
-                "pos": pos,
-                "goal": goal,
-                "status": status,
-            }
-
-        return state
-    
-        # =====================================================
-    #  RandomMode 상태 계산기
-    # =====================================================
-    def compute_robot_status(self, rid, agent, ctx, runstate):
-        rs = runstate.get(rid) or {}
-        s = ctx.get(rid, {})
-
-        executing = rs.get("executing", None)
-        start = agent.start
-        goal  = agent.goal
-
-        # 1) 홈리스 → WAITING (명령을 받지 않음)
-        if s.get("homeless"):
-            return "WAITING"
-
-        # 2) 목표 없음 → IDLE
-        if goal is None:
-            return "IDLE"
-
-        # 3) 목표 도달 → ARRIVED
-        if start and goal and tuple(start) == tuple(goal):
-            return "ARRIVED"
-
-        # 4) 홈→테이블 출발시 delay 세션 → DELAYING
-        if agent.delay and agent.delay > 0:
-            return "DELAYING"
-
-        # 5) 명령 수행 중 → MOVING
-        if executing:
-            return "MOVING"
-
-        # 6) 기본 → MOVING
-        return "MOVING"
 

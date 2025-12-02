@@ -1,122 +1,221 @@
-import sys
-import os
-import numpy as np
-import cv2
 
-from kivy.uix.image import Image
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
-from kivy.uix.anchorlayout import AnchorLayout
 from kivy.graphics import Color, Rectangle
-from kivy.graphics.texture import Texture
 from kivy.clock import Clock
+from kivy.uix.anchorlayout import AnchorLayout
 
-from OpenCV.code.ui_bridge import FrameBus
-from Utilities.UI_utilities import KLine, make_darkcell, make_brightcell
+from Utilities.UI_utilities import KLine, KButton, KLabel
+from OpenCV.code.ui_bridge import FrameBus, post
+from Main_pages2.Main2_grid import GridWidget   
 
+class GroupBox(BoxLayout):
+    def __init__(self, title="", mode="row", **kwargs):
+        super().__init__(orientation="vertical", padding=0, spacing=0, **kwargs)
 
-# =====================================
-# 주문 패널 (FrameBus에서 실시간 이미지 받기)
-# =====================================
-class RestaurantPanel(Image):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        Clock.schedule_interval(self.update_texture, 1 / 30)  # 30FPS
-
-    def update_texture(self, dt):
-        frame = FrameBus.get_orders()
-        if frame is None:
-            return  # 주문 패널이 없으면 아무것도 하지 않음
-
-        # OpenCV → Kivy Texture 변환
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, _ = frame.shape
-        tex = Texture.create(size=(w, h), colorfmt='rgb')
-        tex.blit_buffer(frame.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
-        tex.flip_vertical()
-        self.texture = tex
-
-
-# =====================================
-# LeftWidget (왼쪽 전체 레이아웃)
-# =====================================
-class LeftWidget(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', size_hint_x=0.15, **kwargs)
-
-        # ===== 배경/테두리 =====
+        # 전체 배경
         with self.canvas.before:
+            Color(0x25/255, 0x28/255, 0x3B/255, 1)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+
+        with self.canvas.after:
             Color(0, 0, 0, 1)
             self.border = KLine(self)
-            Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
-            self.bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=self.update_bg_and_border, size=self.update_bg_and_border)
 
-        # ===== 상단 영역 (로봇 구동 정보) =====
-        self.anchor = AnchorLayout(anchor_y='top', size_hint_y=None)
-        self.inner_layout = BoxLayout(orientation='vertical', size_hint=(1, None))
-        self.inner_layout.bind(minimum_height=self.inner_layout.setter('height'))
+        self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # 타이틀
-        self.inner_layout.add_widget(make_darkcell("로봇 구동 정보"))
+        # ================= 1) 타이틀 영역 =================
+        self.title_area = AnchorLayout(
+            size_hint_y=0.2,
+            anchor_x="center",
+            anchor_y="center",
+        )
 
-        # 로봇별 상태 표시
-        for i in range(1, 5):
-            robot_box = BoxLayout(orientation='vertical', size_hint_y=None, spacing=2)
-            robot_box.bind(minimum_height=robot_box.setter('height'))
+        title_label = KLabel(
+            text=title,
+            font_size=15,
+            color=(1,1,1,1),
+            size_hint=(1,1),
+            halign="center",
+            valign="middle",
+        )
+        self.title_area.add_widget(title_label)
+        self.add_widget(self.title_area)
 
-            robot_box.add_widget(make_darkcell(f"D{i}"))
-            for label_text in ["목표 위치", "Delay"]:
-                row = GridLayout(cols=2, size_hint_y=None, height=30)
-                row.add_widget(make_darkcell(label_text))
-                row.add_widget(make_brightcell(""))
-                robot_box.add_widget(row)
+        # ===== 구분선 =====
+        self.separator = BoxLayout(size_hint_y=None, height=1)
+        with self.separator.canvas:
+            Color(0, 0, 0, 1)
+            self.sep_line = Rectangle(pos=self.separator.pos, size=self.separator.size)
+        self.separator.bind(pos=self._update_sep, size=self._update_sep)
+        self.add_widget(self.separator)
 
-            self.inner_layout.add_widget(robot_box)
+        # ================= 2) 버튼 영역 =================
+        self.button_area = BoxLayout(
+            size_hint_y=0.8,
+            padding=10,
+            spacing=10
+        )
+        self.add_widget(self.button_area)
 
-        self.anchor.add_widget(self.inner_layout)
-        self.inner_layout.bind(height=lambda instance, val: setattr(self.anchor, 'height', val))
+        # 버튼 레이아웃 선택
+        if mode == "row":
+            self.button_layout = BoxLayout(
+                orientation="horizontal",
+                spacing=10,
+                size_hint=(1,None)
+            )
+        elif mode == "grid":
+            self.button_layout = GridLayout(
+                cols=2,
+                spacing=10,
+                padding=0,
+                size_hint=(1,None)
+            )
+        else:
+            raise ValueError("mode must be 'row' or 'grid'")
 
-        # ===== 하단 영역 (터미널 또는 주문 패널) =====
-        self.terminal_box = make_darkcell("Terminal Output")  # 기본 터미널 창
-        self.terminal_box.size_hint_y = 1  # 남은 공간 전부 차지
+        anchor = AnchorLayout(anchor_x="center", anchor_y="center")
+        anchor.add_widget(self.button_layout)
 
-        self.orders_panel = RestaurantPanel(size_hint_y=1)
+        self.button_area.add_widget(anchor)
 
-        # 초기엔 터미널 화면 표시
-        self.add_widget(self.anchor)
-        self.add_widget(self.terminal_box)
-
-        # 주기적으로 주문 패널 표시 여부 갱신
-        Clock.schedule_interval(self.update_orders_panel, 1 / 30)
-
-        # 현재 표시 중인 위젯 추적용
-        self.current_bottom_widget = self.terminal_box
-
-    # ===== 주문 패널 표시 제어 =====
-    def update_orders_panel(self, dt):
-        frame = FrameBus.get_orders()
-
-        # 주문 패널 이미지가 있을 때
-        if frame is not None and self.current_bottom_widget is not self.orders_panel:
-            # 터미널 제거 → 주문 패널 추가
-            if self.current_bottom_widget in self.children:
-                self.remove_widget(self.current_bottom_widget)
-            self.add_widget(self.orders_panel)
-            self.current_bottom_widget = self.orders_panel
-            # print("[LeftWidget] 주문 패널 표시")
-
-        # 주문 패널 이미지가 없을 때
-        elif frame is None and self.current_bottom_widget is not self.terminal_box:
-            # 주문 패널 제거 → 터미널 추가
-            if self.current_bottom_widget in self.children:
-                self.remove_widget(self.current_bottom_widget)
-            self.add_widget(self.terminal_box)
-            self.current_bottom_widget = self.terminal_box
-            # print("[LeftWidget] 터미널 창 복귀")
-
-    # ===== 배경/테두리 업데이트 =====
-    def update_bg_and_border(self, *args):
+    def _update_bg(self, *args):
         self.bg.pos = self.pos
         self.bg.size = self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
+
+    def _update_sep(self, *args):
+        self.sep_line.pos = self.separator.pos
+        self.sep_line.size = self.separator.size
+
+# =================== CenterWidget ===================
+class SingleControl(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(orientation="vertical", size_hint_x=0.45, **kwargs)
+
+        self.selected_robot_id = None
+        self.current_scenario_mode = "test"
+
+        # ===== 배경 =====
+        with self.canvas.before:
+            Color(0x2E/255, 0x33/255, 0x49/255, 1)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+
+        with self.canvas.after:
+            Color(0, 0, 0, 1)
+            self.border = KLine(self)
+
+        self.bind(pos=self._update_bg, size=self._update_bg)
+
+        # ===== 상단 (GridView 영역) =====
+        upper = BoxLayout(size_hint_y=0.6)
+        grid_holder = AnchorLayout(anchor_x='center', anchor_y='center')
+
+        # OpenCV 이미지 대신 Kivy Widget으로 변경
+        self.grid_view = GridWidget(grid_json_path = "OpenCV/grid/0926grid.json",
+                                    size_hint=(0.95, 0.95))
+        grid_holder.add_widget(self.grid_view)
+
+        upper.add_widget(grid_holder)
+
+        # ===== 하단 버튼 =====
+        lower = BoxLayout(orientation="vertical", spacing=5, size_hint_y=0.4)
+
+        row1 = BoxLayout(orientation="horizontal", spacing=5)
+        row2 = BoxLayout(orientation="horizontal", spacing=5)
+        
+        # 로봇 선택
+        robot_group = GroupBox(title="로봇 선택", mode = "row")
+        for i in range(1, 5):
+            btn = KButton(text=f"D{i}", size_hint = (1,1))
+            btn.bind(on_press=lambda inst, rid=i: self.select_robot(rid))
+            robot_group.button_layout.add_widget(btn)
+        row1.add_widget(robot_group)
+
+        # 정렬
+        align_group = GroupBox(title="정렬", mode = "row")
+        for text, cmd in [
+            ("중앙 정렬", "center_align"),
+            ("방향 정렬", "direction_align"),
+        ]:
+            btn = KButton(text=text, size_hint = (1,1))
+            btn.bind(on_press=lambda inst, c=cmd: post(cmd=c))
+            align_group.button_layout.add_widget(btn)
+        row1.add_widget(align_group)
+
+        # 보드 제어
+        board_group = GroupBox(title="보드 제어", mode = "grid")
+        for text, cmd in [
+            ("보드 고정", "lock_board"),
+            ("보드 해제", "unlock_board"),
+            ("ROI 재선택", "start_roi_selection"),
+            ("시각화 ON/OFF", "toggle_visualization"),
+        ]:
+            btn = KButton(text=text, size_hint=(1,1))
+            btn.bind(on_press=lambda inst, c=cmd: post(cmd=c))
+            board_group.button_layout.add_widget(btn)
+        row2.add_widget(board_group)
+
+        
+
+        # CBS 제어
+        cbs_group = GroupBox(title="CBS 제어", mode = 'grid')
+        for text, cmd in [
+            ("경로탐색", "compute_cbs"),
+            ("정지", "pause"),
+            ("재개", "resume"),
+            ("즉시정지", "immediate_stop"),
+        ]:
+            btn = KButton(text=text, size_hint = (1,1))
+            btn.bind(on_press=lambda inst, c=cmd: post(cmd=c))
+            cbs_group.button_layout.add_widget(btn)
+        row2.add_widget(cbs_group)
+
+        # 하단 구성
+        lower.add_widget(row1)
+        lower.add_widget(row2)
+
+        self.add_widget(upper)
+        self.add_widget(lower)
+
+        Clock.schedule_interval(self.update_grid_from_backend, 0.1)
+        Clock.schedule_interval(self.sync_scenario_mode, 0.5)
+    # ===== 로봇 선택 =====
+    def select_robot(self, rid):
+        self.selected_robot_id = rid
+        post("select_robot", rid=rid)
+        FrameBus.set_selected_robot(rid)
+        print(f"[UI] robot {rid} selected.")
+
+    # ===== Visual/Border 업데이트 =====
+    def _update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+        self.border.rectangle = (self.x, self.y, self.width, self.height)
+
+    # ===== GridWidget 백엔드 연동 =====
+    def update_grid_from_backend(self, dt):
+        grid = FrameBus.get_grid_state()
+        agents = FrameBus.get_agent_states()
+        goals = FrameBus.get_goal_positions()
+        homes = FrameBus.get_home_positions()
+        paths = FrameBus.get_paths()
+        headings = FrameBus.get_headings()
+
+        self.grid_view.update_backend_state(
+            grid_state=grid,
+            agent_states=agents,
+            goal_positions=goals,
+            home_positions=homes,
+            paths=paths,
+            agent_headings=headings
+        )
+
+
+    # ===== 시나리오 모드 동기화 =====
+    def sync_scenario_mode(self, dt):
+        mode = FrameBus.get_mode()
+        if mode and mode != self.current_scenario_mode:
+            self.current_scenario_mode = mode
+            print(f"[UI] Mode updated → {mode}")

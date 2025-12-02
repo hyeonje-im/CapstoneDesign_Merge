@@ -83,6 +83,11 @@ class RobotController:
         self._last_align_ok_ts = {}
         self.defer_pause_all = False
 
+        #!!! 수정됨
+        self.run_id: int = 0         
+        self.log_start_ts = time.time()
+        self.log_records: list[dict] = [] 
+
         
     def set_sequence_completion_callback(self, callback: Callable[[], None]):
         """전체 시퀀스 완료 시 호출될 콜백 함수를 등록합니다."""
@@ -111,6 +116,27 @@ class RobotController:
     def _normalize_delta_deg(self, delta):
         """각도 정규화: –180° ~ +180°"""
         return ((delta + 180) % 360) - 180
+
+    def get_step_counts(self) -> dict[str, int]:
+        return dict(self.robot_indices)
+
+    def get_step_count(self, rid: int | str) -> int:
+        return self.robot_indices.get(str(rid), 0)
+
+    #!!! 수정됨===== 실험 로그 헬퍼 =====
+    def start_new_run(self):
+        """메인에서 호출: run_id를 올리고, 기준 시간을 초기화"""
+        self.run_id += 1
+        self.log_start_ts = time.time()
+
+    def get_log_records(self):
+        """메인에서 CSV로 저장할 때 사용 (깊은 복사까진 필요 없으면 그대로 리턴해도 OK)"""
+        return self.log_records
+
+    def clear_log_records(self):
+        """CSV로 저장한 뒤 버퍼 비울 때 사용"""
+        self.log_records.clear()
+    # ================================
 
     # ===== 퍼블릭 API =====
     def start_sequence(self, cmd_map: dict[str, list[str]], step_cell_plan: dict[int, dict[str, dict]] | None = None) -> None:
@@ -229,6 +255,30 @@ class RobotController:
                                         delta = self._normalize_delta_deg(delta + 5.0)
                                         print(f"   => 보정 후 delta: {delta:.1f}°")
                                     
+                                    # !!! 수정됨===== 여기부터 실험용 로그 기록 =====
+                                    try:
+                                        if self.tag_info_provider is not None:
+                                            tag_info = self.tag_info_provider()
+                                            # rid는 이 함수 안 for 루프에서 쓰는 로봇 ID (문자열)라고 가정
+                                            tag = tag_info.get(int(rid), {})
+                                            center_error_cm = tag.get("dist_cm", None)
+
+                                            if center_error_cm is not None:
+                                                now = time.time()
+                                                record = {
+                                                    "run_id": self.run_id,
+                                                    "time_s": now - self.log_start_ts,
+                                                    "robot_id": int(rid),
+                                                    "step_index": self.current_step,
+                                                    "center_error_cm": float(center_error_cm),
+                                                    "heading_correction_deg": float(delta),  # 다음 셀까지 보정량(부호 포함)
+                                                }
+                                                self.log_records.append(record)
+                                    except Exception as e:
+                                        # 로깅이 실험용이니까, 혹시 문제 나도 메인 로직은 안 죽게 그냥 경고만
+                                        print(f"[LOG] 기록 중 예외 발생: {e}")
+                                    # ===== 로그 기록 끝 =====
+
                                     # ✅ 항상 두 단계(회전 + 직진)로 보냄
                                     rot_deg = round(abs(delta), 1)
                                     if rot_deg < 0.1:

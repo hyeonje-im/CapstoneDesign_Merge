@@ -15,30 +15,48 @@ from Utilities.UI_utilities import KToggleRoundedButton
 # 1) 개별 행 위젯: Num | Pos | Goal | Status
 # ====================================================
 class OrderRowWidget(BoxLayout):
-    def __init__(self, num="#12", pos="[3,1]", goal="[3,4]", status="MOVING", **kwargs):
+    def __init__(self, num="#12", pos="[3,1]", goal="[3,4]", status="MOVING",
+                 order_enabled=False, order_callback=None, **kwargs):
         super().__init__(orientation="horizontal", size_hint_y=None, height=dp(36), spacing=10, **kwargs)
 
         # Num
-        self.add_widget(Label(text=num, size_hint_x=0.2,
+        self.add_widget(Label(text=num, size_hint_x=0.15,
                               halign="left", valign="middle", color=(0,0,0,1)))
 
         # Position
-        self.add_widget(Label(text=pos, size_hint_x=0.25,
+        self.add_widget(Label(text=pos, size_hint_x=0.2,
                               halign="left", valign="middle", color=(0,0,0,1)))
 
         # Goal
-        self.add_widget(Label(text=goal, size_hint_x=0.25,
+        self.add_widget(Label(text=goal, size_hint_x=0.2,
                               halign="left", valign="middle", color=(0,0,0,1)))
 
         # Status 버튼
         st = Button(
             text=status,
-            size_hint_x=0.3,
+            size_hint_x=0.25,
             background_color=self._status_color(status),
             background_normal="",
-            color=(0,0,0,1)
+            color=(0,0,0,1),
+            disabled=True
         )
         self.add_widget(st)
+
+        # ORDER 버튼
+        self.order_btn = Button(
+            text="ORDER",
+            size_hint_x=0.18,
+            background_color=(0.3, 0.9, 0.4, 1),
+            background_normal="",
+            color=(0,0,0,1),
+            disabled=not order_enabled
+        )
+
+        if order_callback:
+            self.order_btn.bind(on_release=lambda *_: order_callback())
+
+        self.add_widget(self.order_btn)
+
 
     # ----------------------------------------------
     # 상태별 색상
@@ -63,7 +81,7 @@ class OrderRowWidget(BoxLayout):
 class IDColumnWidget(BoxLayout):
     def __init__(self, title="ID1", side="middle", **kwargs):
         super().__init__(orientation="vertical", spacing=10, padding=10, **kwargs)
-
+        
         # === 라운딩 설정 ===
         if side == "left":
             radius = [dp(10), 0, 0, dp(10)]
@@ -88,11 +106,12 @@ class IDColumnWidget(BoxLayout):
         self.add_widget(title_label)
 
         # --- Header ---
-        header = GridLayout(cols=4, size_hint_y=None, height=dp(30))
+        header = GridLayout(cols=5, size_hint_y=None, height=dp(30))
         header.add_widget(Label(text="Num", bold=True, color=(0,0,0,1)))
         header.add_widget(Label(text="Pos", bold=True, color=(0,0,0,1)))
         header.add_widget(Label(text="Goal", bold=True, color=(0,0,0,1)))
         header.add_widget(Label(text="Status", bold=True, color=(0,0,0,1)))
+        header.add_widget(Label(text="Order", bold=True, color=(0,0,0,1))) 
         self.add_widget(header)
 
         # --- 리스트 영역 ---
@@ -222,30 +241,45 @@ class ScenarioOrderList(BoxLayout):
             robot = ui_state.get(rid)
             orders = order_state.get(rid) if order_state else None
 
-        # -------------------------
-        # 1) 로봇 기본 상태 1줄 표시
-        # -------------------------
+            # -------------------------
+            # 1) 로봇 기본 상태 1줄 표시 + ORDER 버튼
+            # -------------------------
             if robot:
                 num = str(robot.get("num", "-"))
                 pos = str(robot.get("pos", "-"))
                 goal = str(robot.get("goal", "-"))
                 status = robot.get("status", "IDLE")
+                ready = robot.get("ready_for_order", False)
 
-                row = OrderRowWidget(num=num, pos=pos, goal=goal, status=status)
+                # 버튼 클릭 시 on_number_key 호출
+                def make_callback(rid=rid):
+                    from OpenCV.code.ui_bridge import post
+                    post("scenario.number_key", {"rid": rid})
+
+                row = OrderRowWidget(
+                    num=num,
+                    pos=pos,
+                    goal=goal,
+                    status=status,
+                    order_enabled=ready,
+                    order_callback=make_callback
+                )
                 col.list_layout.add_widget(row)
 
-        # -------------------------
-        # 2) RestaurantMode 주문 목록 표시
-        # -------------------------
+            # -------------------------
+            # 2) RestaurantMode 주문 목록 표시
+            # -------------------------
             if orders:
-                for od in orders:  # od는 dict
+                for od in orders:
                     od_num   = f"Order {od.get('order_id', '-')}"
                     od_pos   = str(od.get("start", "-"))
                     od_goal  = str(od.get("goal", "-"))
                     od_stat  = od.get("status", "-")
 
                     od_row = OrderRowWidget(
-                        num=od_num, pos=od_pos, goal=od_goal, status=od_stat
+                        num=od_num, pos=od_pos, goal=od_goal, status=od_stat,
+                        order_enabled=False,     # 주문 리스트에는 버튼 없음
+                        order_callback=None
                     )
                     col.list_layout.add_widget(od_row)
 

@@ -8,7 +8,8 @@ import time
 from queue import Queue, Empty
 import threading  # ◀◀◀ [추가]
 import copy
-
+import csv
+from datetime import datetime
 # UI 연동 관련
 
 SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
@@ -22,6 +23,11 @@ def push_keycode(code: int):
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
+
+#!!!수정됨
+LOG_DIR = os.path.join(CURRENT_DIR, "logs")   # ◀◀◀ 추가
+os.makedirs(LOG_DIR, exist_ok=True)          # ◀◀◀ 추가
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 ICBS_PATH = os.path.join(CURRENT_DIR, '..', 'MAPF-ICBS', 'code')
@@ -64,6 +70,10 @@ ROBOT_HOME_POSITIONS = {
 
 MODE_FACTORY = {
     "test": lambda: TestMode(),
+    "random": lambda: RandomMode(
+        idle_threshold_frames=12,        # 영상에서 멈춘 프레임 카운트(12~15 사이 추천)
+        home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid)
+    ),
     "restaurant": lambda: RestaurantMode(
         
         home_provider=lambda rid: ROBOT_HOME_POSITIONS.get(rid),
@@ -72,6 +82,8 @@ MODE_FACTORY = {
 }
 _mode_keys = list(MODE_FACTORY.keys())
 _mode_idx = [0]  # 가변 캡쳐용(리스트)
+
+cbs_index = 0
 
 # CBS 설정 !!!수정됨
 SOLVER_CHOICES = ["CBS", "ICBS_CB", "ICBS", "ICBS_CC"]
@@ -161,7 +173,15 @@ cv2.createTrackbar(
     int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
 )
 
-
+def get_tag_info_safe():  # ◀◀◀ [추가 시작]
+    """
+    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
+    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
+     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
+    """
+    with TAG_INFO_LOCK:
+        return copy.deepcopy(tag_info)
+    
 # 전역 변수
 
 #근접 시 즉시 정지 기능
@@ -176,19 +196,8 @@ grid_array = None
 visualize = True
 # tag_info 전역 변수 초기화
 tag_info = {}
-
-TAG_INFO_LOCK = threading.Lock()
-
-def get_tag_info_safe():  # ◀◀◀ [추가 시작]
-    """
-    스레드 충돌을 방지하며 tag_info의 '깊은 복사본(deepcopy)'을 반환합니다.
-    (deepcopy를 사용하면, 컨트롤러가 데이터를 읽는 도중에 
-     메인 스레드가 원본을 수정해도 컨트롤러가 가진 데이터는 안전합니다.)
-    """
-    with TAG_INFO_LOCK:
-        return copy.deepcopy(tag_info)
-    
 set_tag_info_provider(get_tag_info_safe)
+
 
 # 비전 시스템 초기화
 #video_path = r"C:/img/test2.mp4"
@@ -207,6 +216,44 @@ vision.correction_coef_getter = lambda: correction_coef_value
 # 로봇 ID 관련
 PRESET_IDS = []
 selected_robot_id = None
+
+TAG_INFO_LOCK = threading.Lock()
+
+
+# !!! 수정됨
+def save_logs_to_csv():
+    """RobotController.log_records를 CSV로 저장"""
+    records = controller.get_log_records()
+    if not records:
+        print("[LOG] 저장할 레코드가 없습니다.")
+        return
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(LOG_DIR, f"pose_log_run{controller.run_id}_{ts}.csv")
+
+    fieldnames = [
+        "run_id",
+        "time_s",
+        "robot_id",
+        "step_index",
+        "center_error_cm",
+        "heading_correction_deg",
+    ]
+
+    try:
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in records:
+                writer.writerow(row)
+        print(f"[LOG] CSV 저장 완료: {filename}")
+    except Exception as e:
+        print(f"[LOG] CSV 저장 중 예외 발생: {e}")
+
+
+    
+
+
 
 
 
@@ -504,7 +551,7 @@ def update_agents_from_tags(tag_info):
 # CBS 실행(컨트롤러 유지)
 # ---------------------------
 def compute_cbs():
-    global paths, pathfinder, grid_array
+    global paths, pathfinder, grid_array, cbs_index
 
     # 0) 준비된/대기 에이전트 분리
     ready_agents = [a for a in agents if a.start and a.goal]
@@ -539,7 +586,9 @@ def compute_cbs():
     paths.clear()
     paths.extend([a.get_final_path() for a in valid_agents])
     print("Paths updated via PathFinder (waiters treated as obstacles).")
-
+    print(cbs_index)
+    cbs_index += 1
+    
     # 4) 하드웨어 명령 제작 + 전송
     payload_commands = []
     step_cell_plan: dict[int, dict[str, dict]] = {}
@@ -564,6 +613,61 @@ def compute_cbs():
     print("▶ 순차 전송 시작:", cmd_map)
     controller.start_sequence(cmd_map, step_cell_plan=step_cell_plan)
 
+def build_remaining_paths_for_inicbs(
+    controller: RobotController,
+    paths_list: list[tuple[int, list[tuple[int, int]]]],
+    replan_ids: set[int],
+):
+
+    full_paths: dict[int, list[tuple[int, int]]] = {
+        rid: p for (rid, p) in paths_list
+    }
+    step_counts = controller.get_step_counts()
+    dynamic_starts: list[tuple[int, int]] = []
+    dynamic_goals: list[tuple[int, int]] = []
+    other_paths: list[list[tuple[int, int]]] = []
+
+    all_ids_sorted = sorted(full_paths.keys())
+
+    for rid in all_ids_sorted:
+        if rid not in replan_ids:
+            continue
+
+        path = full_paths[rid]
+        k = step_counts.get(str(rid), 0)
+        if not path:
+            remaining = []
+        elif k >= len(path):
+            remaining = [path[-1]]
+        else:
+            remaining = path[k:]
+
+        if not remaining:
+            remaining = [path[-1]]
+
+        dynamic_starts.append(remaining[0])  # t=0 위치
+        dynamic_goals.append(path[-1])       # 원래 goal 유지
+
+    for rid in all_ids_sorted:
+        if rid in replan_ids:
+            continue
+
+        path = full_paths[rid]
+        k = step_counts.get(str(rid), 0)
+
+        if not path:
+            remaining = []
+        elif k >= len(path):
+            remaining = [path[-1]]
+        else:
+            remaining = path[k:]
+
+        if not remaining:
+            remaining = [path[-1]]
+
+        other_paths.append(remaining)
+
+    return dynamic_starts, dynamic_goals, other_paths
 
 # ---------------------------
 # 유틸: 정지/재개/즉시정지
@@ -700,6 +804,16 @@ def main():
             fake_key = ord(str(rid))                # 숫자키 코드로 변환 (예: 1 → 49)
             handle_number_key_unified(fake_key)     # 🔹 숫자키와 동일한 로직 수행
             print(f"[UI] 로봇 선택됨 → {rid}")
+
+        elif cmd == "order_trigger":
+            rid = int(kwargs["rid"])
+            print(f"[UI] ▶ order_trigger 받음 → 로봇 {rid} 다음 명령 실행 요청")
+
+            # 시나리오 모드라면 해당 모드의 on_number_key 실행
+            if hasattr(scenario, "on_number_key"):
+                scenario.on_number_key(rid)
+            else:
+                print("⚠️ scenario.on_number_key 없음 — 현재 모드에서는 지원되지 않습니다.")
 
 
         elif cmd == "compute_cbs":                # 키: 'c'
@@ -838,6 +952,7 @@ def main():
             DISJOINT = not DISJOINT
             print(f"[UI][MAPF] disjoint = {DISJOINT}")
 
+        
         # =============================
         # =============================
 
@@ -895,6 +1010,7 @@ def main():
         # 숫자키로 대상 선택/토글 (예: 1~9)
         elif key in tuple(ord(str(i)) for i in range(1, 10)):
             # 1) 시나리오 모드인지 확인
+            rid = int(chr(key))
             if isinstance(scenario.mode,(RestaurantMode, TestMode, RandomMode)):
                 
                 scenario.on_number_key(rid)
@@ -971,6 +1087,17 @@ def main():
             DISJOINT = not DISJOINT
             print(f"[MAPF] disjoint = {DISJOINT}")
         
+        #!!! 수정됨
+        elif key == ord('h'):
+            # 새 run 시작: run_id++, 기준 시간 초기화, 이전 로그는 비워줌
+            controller.start_new_run()
+            controller.clear_log_records()
+            print(f"[LOG] 새 run 시작: run_id = {controller.run_id}")
+
+        elif key == ord('j'):
+            # 현재까지 누적된 로그를 CSV로 저장
+            save_logs_to_csv()
+
         # elif key == ord('d'):
         #     if manual.is_manual_mode():
         #         print("ℹ️ 수동모드에서는 d(자동시퀀스) 비활성화. Z로 해제 후 사용하세요.")

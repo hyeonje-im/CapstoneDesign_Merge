@@ -235,20 +235,22 @@ class RestaurantMode:
 
         self._reload_table_config(force=False)
 
-        # 1) 신규 주문 생성 타이밍이면 한 개 만든다 (UI: order_new → order_list 뒤에 append 후 휘발)
+        # 1) 주문 생성
         if now >= self._next_order_at:
             self._next_order_at = now + self._rnd_span()
-            # 목적지 후보 생성(중복 제외)
+
             occ = self.occupied_from_tags(tag_info)
             starts = {tuple(a.start) for a in agents if a.start}
             goals  = {tuple(a.goal) for a in agents if a.goal}
             homes  = {tuple(self._home_of(ctx, a.id)) for a in agents if self._home_of(ctx, a.id)}
+
             forbidden = set(starts) | set(goals) | set(occ) | set(homes)
             taken_dsts = {dst for _, dst in self.order_list} | {dst for _, dst in self.order_start}
             dst = self._pick_from_table_meta(grid, forbidden | taken_dsts)
-            # 대상 로봇은 일단 무작위(보이는 로봇 중), 로봇별 최대 2개 제한
+
             visible = [a.id for a in agents if a.start]
             random.shuffle(visible)
+
             rid = None
             if dst is not None:
                 for cand in visible:
@@ -256,47 +258,70 @@ class RestaurantMode:
                     if cnt < 2:
                         rid = cand
                         break
-            if rid is not None and dst is not None:
-                self.order_new = (rid, dst)           # UI에서 잠깐 보일 버퍼
-                self.order_list.append((rid, dst))    # 큐 뒤에 추가
-            else:
-                self.order_new = None  # 생성 실패(공간 부족/로봇 과다)면 휘발
 
-        # 2) HOME 판정 및 유지
+            if rid is not None and dst is not None:
+                self.order_new = (rid, dst)
+                self.order_list.append((rid, dst))
+            else:
+                self.order_new = None
+
+        # 2) HOME 판정
         for a in agents:
             s = self.ensure_agent_ctx(ctx, a.id)
             if s.get("homeless") or not s.get("home") or not a.start:
                 continue
             if tuple(a.start) != tuple(s["home"]):
-                # HOME을 벗어나면 ready 해제
                 self.home_set.discard(a.id)
 
-        # 3) 별도 CBS 트리거 없음 (번호키로 소비 시 CBS 필요)
-        return None
+        # 3) ★ ready_for_order 계산
+        ready_state = {}
+        for a in agents:
+            rid = a.id
+            s = self.ensure_agent_ctx(ctx, rid)
+            home = s.get("home")
 
-    # ------------------------------ 외부 이벤트 ------------------------------
+            if s.get("homeless") or not home or not a.start:
+                ready_state[rid] = False
+                continue
+
+            if tuple(a.start) == tuple(home) and rid in self.home_set:
+                ready_state[rid] = True
+            else:
+                ready_state[rid] = False
+
+        # 4) ★ ready_for_order 반환
+        return self.result(
+            replan=False,
+            ready_for_order=ready_state,
+            reason="tick_ready"
+        )
+            
+
     def on_number_key(self, rid: int, *, agents: List, ctx: Dict[int, dict]):
-        """
-        메인에서 번호키가 눌렸을 때 호출.
-        HOME 상태가 아니면 무시.
-        HOME이고 order_list에 내 주문이 있으면 '맨 앞' 하나를 꺼내서 수행 시작.
-        """
         if rid not in self.home_set:
             return None
-        # 맨 앞에서 해당 rid 주문 하나 찾기
+
         idx = next((i for i,(r,_) in enumerate(self.order_list) if r == rid), None)
         if idx is None:
             return None
+
         (r, dst) = self.order_list.pop(idx)
         self.order_start.add((r, dst))
         self.order_to_table.add((r, dst))
         self.home_set.discard(rid)
-        # 해당 로봇 goal 설정 → CBS 재계획
+
         a = next((x for x in agents if x.id == rid), None)
         if not a:
             return None
+
         a.goal = tuple(dst)
-        return self.result(replan=True, reason="order_start")
+
+        # ★ 주문 시작했으므로 ready=False
+        return self.result(
+            replan=True,
+            ready_for_order={rid: False},
+            reason="order_start"
+        )
 
     # ------------------------------ 콜백 ------------------------------
     def on_sequence_complete(self, *, tag_info: dict, grid: np.ndarray, agents: List, ctx: Dict[int, dict], runstate: Dict[int, dict]):
@@ -343,28 +368,34 @@ class RestaurantMode:
 
     # RestaurantMode.py — on_alignment_complete(...)
     def on_alignment_complete(self, rid: int, *, tag_info, grid, agents, ctx, runstate):
-        # 1) 초기 정렬 완료 추적
         a = next((x for x in agents if x.id == rid), None)
-        if not a: 
+        if not a:
             return None
         home = self._home_of(ctx, rid)
 
-        # 초기 정렬 펜딩 관리(완료 메시지 출력은 현재 코드 그대로 유지)
         pending = ctx.get("_init_align_pending")
         if isinstance(pending, set) and rid in pending:
             pending.discard(rid)
             if not pending:
                 print("✅ 초기 중앙→방향 정렬 완료 (all robots)")
 
-        # ★ HOME이 아니라면: 이제 목표를 HOME으로 주고 replan 요청
+        # HOME이 아니면 HOME 복귀
         if home and a.start and tuple(a.start) != tuple(home):
             a.goal = tuple(home)
             return self.result(replan=True, reason="align_then_home")
 
-        # HOME 위라면 HOME 상태 진입(현재 코드 그대로)
+        # ★ HOME이면 HOME 상태
         if home and a.start and tuple(a.start) == tuple(home):
             self.home_set.add(rid)
-        return None
+
+            # ★ 정렬까지 끝났으므로 ready=True
+            return self.result(
+                replan=False,
+                ready_for_order={rid: True},
+                reason="home_align_ready"
+            )
+
+        return None                     
 
 
     def on_robot_complete(self, rid: int, *, tag_info, grid, agents, ctx, runstate):
@@ -379,6 +410,7 @@ class RestaurantMode:
         # A) 테이블 도착 → 즉시 HOME 목표 부여 + replan
         if at_table:
             self.order_to_table.discard((rid, tuple(a.start)))
+            
             finished = next(((r, dst) for (r, dst) in self.order_start
                              if r == rid and tuple(dst) == tuple(a.start)), None)
             if finished:
@@ -389,6 +421,7 @@ class RestaurantMode:
                                if r==finished[0] and tuple(dst)==tuple(finished[1])), None)
                 if rm_idx is not None:
                     self.order_list.pop(rm_idx)
+
             if home and tuple(a.start) != tuple(home):
                 a.goal = tuple(home)
                 self.order_to_home.add((rid, tuple(home)))
@@ -401,6 +434,7 @@ class RestaurantMode:
                 replan=False,
                 align_center={rid},
                 align_direction={rid},
+                ready_for_order={rid: True},
                 reason="home_first_arrival_align",
                 align_delay_sec=0.5
             )
