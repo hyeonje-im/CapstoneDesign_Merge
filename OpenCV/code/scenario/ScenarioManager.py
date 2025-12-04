@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol, TypedDict, Dict, List, Set, Tuple, Optional, Callable
 import numpy as np
 import time, random
+import threading
 
 from OpenCV.code.cbs.pathfinder import PathFinder, Agent
 from OpenCV.code.ui_bridge import FrameBus   # ★ UI 연동 추가
@@ -86,6 +87,7 @@ class ScenarioManager:
         self._active_step_count = 0
         self._last_mode_result: dict = {}
         self._last_runstate: Dict[int, dict] = {}
+        self.cbs_index = 0
         
         # Controller 콜백 등록
         controller.set_alignment_completion_callback(self.on_align_complete)
@@ -247,16 +249,30 @@ class ScenarioManager:
             return
         self._replanning = True
 
-        try:
-            self._sync_starts_from_tags()
-            # last dst fallback 생략 (기존 그대로 유지)
-            grid = self.get_grid()
-            self._plan_and_send(grid, res)
-        finally:
-            self._replanning = False
-            self._replan_requested = False
+# 1. 지연 실행될 내부 함수 정의
+        def _deferred_replan(grid_snapshot, res_snapshot):
+            try:
+                # 1) 태그 다시 동기화 (1초 뒤 최신 위치 반영)
+                self._sync_starts_from_tags()
+                
+                # (옵션: 업로드 파일에 있던 'last dst fallback' 로직을 여기에 추가할 수도 있음)
+                
+                # 2) 계획 및 전송
+                self._plan_and_send(grid_snapshot, res_snapshot)
+                
+                # 3) 지연 실행 후 상태 UI 업데이트 (필요 시)
+                self._update_ui_state(self._build_runstate())
+                
+            finally:
+                self._replanning = False
+                self._replan_requested = False
 
-        # ★ UI 업데이트
+        # 2. 1.0초 타이머 시작
+        print(f"[Scenario] 경로 완료. 다음 계획까지 1.0초 대기...")
+        grid_now = self.get_grid()  # 현재 그리드 캡처
+        threading.Timer(1.0, _deferred_replan, args=[grid_now, res]).start()
+
+        # ★ UI 업데이트 (대기 상태 즉시 반영)
         self._update_ui_state(rs)
 
     # ---------------------------------------------------------------
@@ -271,6 +287,8 @@ class ScenarioManager:
     # ---- CBS 실행 + 명령 전송 (단일 트리거 지점) ----
     def _plan_and_send(self, grid, res):
         # A) 모드 결과 정규화
+        print("cbs_index",self.cbs_index)
+        self.cbs_index += 1
         waiters_ids  = set(res.get("waiters", set()))
         waiters_ids |= set(self.ctx.get("_aligning", set()))
         ready_ids    = res.get("ready")  # 없으면 전체 start!=goal 대상

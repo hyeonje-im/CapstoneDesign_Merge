@@ -83,8 +83,6 @@ MODE_FACTORY = {
 _mode_keys = list(MODE_FACTORY.keys())
 _mode_idx = [0]  # 가변 캡쳐용(리스트)
 
-cbs_index = 0
-
 # CBS 설정 !!!수정됨
 SOLVER_CHOICES = ["CBS", "ICBS_CB", "ICBS", "ICBS_CC"]
 _SOLVER_IDX = 0   # 0:CBS, 1:ICBS_CB, 2:ICBS  (기본 CBS)
@@ -586,8 +584,6 @@ def compute_cbs():
     paths.clear()
     paths.extend([a.get_final_path() for a in valid_agents])
     print("Paths updated via PathFinder (waiters treated as obstacles).")
-    print(cbs_index)
-    cbs_index += 1
     
     # 4) 하드웨어 명령 제작 + 전송
     payload_commands = []

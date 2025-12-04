@@ -79,8 +79,8 @@ class KButton(ButtonBehavior, BoxLayout):
         self.text = text
 
         # 색상 정의
-        self.normal_color = (0x2E/255, 0x33/255, 0x49/255, 1)  # 밝은 셀
-        self.down_color   = (0x25/255, 0x28/255, 0x3B/255, 1)  # 어두운 셀
+        self.normal_color = (0xAB/255, 0xAB/255, 0xAB/255, 1)  # 밝은 셀
+        self.down_color   = (0xAB/255, 0xAB/255, 0xAB/255, 1)  # 어두운 셀
 
         # 배경 + 테두리
         with self.canvas.before:

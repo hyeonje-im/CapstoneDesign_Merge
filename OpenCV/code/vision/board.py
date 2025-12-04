@@ -171,7 +171,7 @@ class BoardDetector:
         # 탐색 파라미터
         self.enable_contour_fallback = True
         self.debug_draw = True
-        self.min_len_ratio = 0.05
+        self.min_len_ratio = 0.15
         self.max_gap_ratio = 0.05
         self.ortho_tol_deg = 30.0
 
