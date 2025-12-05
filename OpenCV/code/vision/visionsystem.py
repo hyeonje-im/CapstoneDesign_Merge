@@ -1,17 +1,15 @@
-
 import cv2
 import numpy as np
 import math
 from typing import Optional, Tuple, Dict
 from types import SimpleNamespace
-import time
 
-from vision.apriltag import AprilTagDetector
-from config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
-from vision.board import BoardDetectionResult, BoardDetector
-from vision.obstacle import ObstacleDetector
-from vision.tracking import TrackingManager
 
+from OpenCV.code.vision.apriltag import AprilTagDetector
+from OpenCV.code.config import board_width_cm, board_height_cm, grid_row, grid_col, cell_size, cell_size_cm, tag_size, CORRECTION_COEF, NORTH_TAG_ID, board_margin, critical_dist
+from OpenCV.code.vision.board import BoardDetectionResult, BoardDetector
+from OpenCV.code.vision.obstacle import ObstacleDetector
+from OpenCV.code.ui_bridge import FrameBus
 class VisionSystem:
     def __init__(self, undistorter, visualize=True):
         
@@ -24,12 +22,6 @@ class VisionSystem:
         self.last_valid_result = None
         self.board = BoardDetector(board_width_cm, board_height_cm, grid_row, grid_col, board_margin)
         self.board_result: BoardDetectionResult | None = None
-        self.tracker = TrackingManager(
-           window_sec=0.25,       # 30fps 기준 ~7~8프레임
-           max_speed_cmps=200.0,  # 환경에 맞게
-           zero_snap_thr=2.0,     # 2cm/s 이하면 0으로 스냅
-           ema_tau=0.15           # 속도 EMA 시간상수
-        )
         self.frame_count = 0
         self.roi_filter = ROIFilter()
         
@@ -37,11 +29,6 @@ class VisionSystem:
         self.manual_roi_top_left = None
         self.manual_roi_bottom_right = None
         self.user_selecting_roi = False
-
-        # 자동 ROI 설정
-        self._last_roi_bbox = None         # (x_min, y_min, x_max, y_max)
-        self._locked_roi_bbox = None       # lock 시점의 ROI를 동결 보관
-        self.lock_roi_margin = 0.20        # 필요 시 튜닝
 
         # 화면 해상도 설정
         self.frame_shape = None
@@ -53,12 +40,11 @@ class VisionSystem:
         self._last_obstacle_grid = None
         self._last_obstacle_debug = None
 
-        self.show_pairwise_distances = True       # 화면에 거리 표시 ON/OFF
+        self.show_pairwise_distances = False       # 화면에 거리 표시 ON/OFF
         self.proximity_threshold_cm = critical_dist        # 임계 거리(색상 기준)
         self.exclude_ids_for_distance = {NORTH_TAG_ID}
-
-        self.frame_margin_ratio = 0.05
-
+        self.frame_margin_ratio = 0.04
+        self.obstacle_locked_once = False
     # =====수동 ROI 선택===== 
     
     def start_roi_selection(self):
@@ -88,7 +74,7 @@ class VisionSystem:
     # ===== 수동 ROI 선택 끝 =====
         
     # ===== 프레임 처리 =====
-    def process_frame(self, raw_frame, detect_params=None, scale=2):
+    def process_frame(self, raw_frame, detect_params=None, scale_enh=1, path_viz_data: Optional[Dict] = None):
         
         # 1) 기본 프레임 전처리 및 회색조
         frame, new_camera_matrix = self.undistorter.undistort(raw_frame)
@@ -118,7 +104,7 @@ class VisionSystem:
 
         # 태그 필터 프레임에서 태그 탐지
         raw_tags = self.tags.detect(tag_filtered_frame)
-        tags = self.correct_tag_coordinates(raw_tags, (roi_x_min, roi_y_min, roi_x_max - roi_x_min, roi_y_max - roi_y_min), scale)
+        tags = self.correct_tag_coordinates(raw_tags, (roi_x_min, roi_y_min, roi_x_max - roi_x_min, roi_y_max - roi_y_min), self.roi_filter.scale_enh)
         self.tags.update(tags, self.frame_count, new_camera_matrix, self.frame_shape)
             
         # 4) ROI 동기화 + 보드 처리 (자동 탐색 경로 사용)
@@ -135,14 +121,23 @@ class VisionSystem:
             self.transform_coordinates(tag_info)
             self.compute_tag_orientation(tag_info)
 
-            self.tracker.update_all(tag_info, time.time())
+        # === FrameBus: heading 업데이트 ===
+        headings = {}
+        for tag_id, data in tag_info.items():
+            if data.get("status") != "On":
+                continue
+            heading = data.get("yaw_front_to_north_deg")
+            if heading is not None:
+                headings[tag_id] = heading
+
+        FrameBus.set_headings(headings)
 
         # 6) 시각화 처리
         if self.visualize:
             cv2.rectangle(frame, (roi_x_min, roi_y_min), (roi_x_max, roi_y_max), (0, 0, 255), 2)
             self.board.draw(frame, self.board_result)
             self.tags.draw(frame)
-            self.draw_tag_overlay(frame, tag_info)
+            self.draw_tag_overlay(frame, tag_info, path_viz_data=path_viz_data)
 
         if self.manual_roi_top_left and self.manual_roi_bottom_right:
             roi_display = roi_frame.copy()
@@ -156,76 +151,78 @@ class VisionSystem:
         
         # 보드가 lock 상태이고 결과가 있을 때
         if self.board.is_locked and self.board_result is not None:
-            # (유지) 장애물 업데이트
-            occ = self.obstacle_detector.update_from_board(self.board_result)
-            if occ is not None:
-                self._last_obstacle_grid = (occ.astype('uint8'))
-                self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
+            if not self.obstacle_locked_once:
+            # 1) 장애물 갱신(기존 유지)
+                occ = self.obstacle_detector.update_from_board(self.board_result)
+                if occ is not None:
+                    self._last_obstacle_grid = (occ.astype('uint8'))
+                    # ★ FrameBus 연동
+                    FrameBus.set_grid_state(self._last_obstacle_grid)
+                    self._last_obstacle_debug = self.obstacle_detector.get_debug_warped()
+                self.obstacle_locked_once = True
+            # 2) src/dst 준비
+            #   - src: 보드 4코너(원본 픽셀 좌표)
+            #   - dst: (0,0)~(W-1,H-1) 사각형(여백 포함)
+            br = self.board_result
+            src = br.corners.astype(np.float32)
+            w_px = int(br.width_px)
+            h_px = int(br.height_px)
 
-            # === 원본(BGR) → (ROI 보정) → 보드 평면 Homography 구성 ===
-            H_roi = self.board_result.perspective_matrix  # ROI 좌표계 기준 H
-            w_px = int(self.board_result.width_px)
-            h_px = int(self.board_result.height_px)
-
-            if self._last_roi_bbox is not None:
-                x_min, y_min, _, _ = self._last_roi_bbox
-            else:
-                x_min, y_min = 0, 0
-
-            T = np.array([
-                [1.0, 0.0, -float(x_min)],
-                [0.0, 1.0, -float(y_min)],
-                [0.0, 0.0,  1.0]
-            ], dtype=np.float32)
-            H_full = H_roi @ T  # 원본 프레임 좌표 → ROI → 보드 평면
-
-            # 1) 컬러 원본을 보드 평면으로 워프 (잘라내기 아님, 진짜 warp)
-            margin_ratio = self.frame_margin_ratio  # 10%
-            new_w = int(round(w_px * (1 + 2 * margin_ratio)))  # 좌우 각각 10%
-            new_h = int(round(h_px * (1 + 2 * margin_ratio)))  # 상하 각각 10%
-
-            margin_x = int(round(w_px * margin_ratio))
-            margin_y = int(round(h_px * margin_ratio))
+            m = getattr(self, "frame_margin_ratio", 0.05)
+            new_w = int(round(w_px * (1 + 2*m)))
+            new_h = int(round(h_px * (1 + 2*m)))
+            pad_w = int(round(new_w * m))
+            pad_h = int(round(new_h * m))
 
             dst = np.array([
-                [margin_x, margin_y],
-                [new_w - margin_x - 1, margin_y],
-                [new_w - margin_x - 1, new_h - margin_y - 1],
-                [margin_x, new_h - margin_y - 1]
+                [pad_w,         pad_h        ],
+                [new_w-pad_w-1, pad_h        ],
+                [new_w-pad_w-1, new_h-pad_h-1],
+                [pad_w,         new_h-pad_h-1]
             ], dtype=np.float32)
-            
-            src = self.board_result.corners.astype(np.float32)  # 원본 보드 네 모서리
+
+            # 3) Homography & 컬러 warp
             H_full = cv2.getPerspectiveTransform(src, dst)
             warped_color = cv2.warpPerspective(raw_bgr, H_full, (new_w, new_h))
+            # ★ FrameBus 연동
+            FrameBus.set_warped(warped_color)
 
-            # 2) 오버레이(검정 색상만): 그리드 외곽선(=그리드 선들) + 셀 중앙 점
-            if self.board_result.grid_reference is not None:
-                glines = self.board_result.grid_reference.get("grid_lines", {})
-                # 그리드 선(외곽 포함 전체 격자)을 검정으로
-                for segs in self.board_result.grid_reference["grid_lines"].values():
+            # 4) 그리드/셀 중심 오버레이 (있을 때만)
+            ref = getattr(br, "grid_reference", None)
+            if ref:
+                # ── grid_lines ──
+                glines = ref.get("grid_lines", {})
+                for segs in glines.values():
                     for (p1_cm, p2_cm) in segs:
                         p1 = self.cm_to_warp_px(p1_cm[0], p1_cm[1])
                         p2 = self.cm_to_warp_px(p2_cm[0], p2_cm[1])
                         if p1 and p2:
-                            cv2.line(warped_color, p1, p2, (0,0,0), 1)
+                            cv2.line(warped_color, p1, p2, (0, 0, 0), 1)
 
-                # 셀 중앙 점(검정)
-                for (cx, cy) in self.board_result.grid_reference["cell_centers"]:
+                # ── cell_centers ──
+                for (cx, cy) in ref.get("cell_centers", []):
                     q = self.cm_to_warp_px(cx, cy)
                     if q is not None:
-                        cv2.circle(warped_color, q, 2, (0,0,0), -1)
+                        cv2.circle(warped_color, q, 2, (0, 0, 0), -1)
 
-            # 3) 기존 미리보기 창 이름을 그대로 사용 (새 창 만들지 않음)
-            warped_resized = cv2.resize(
-                warped_color,
-                (frame.shape[1] // 2, frame.shape[1] // 2)
-            )
-            cv2.imshow("Warped Board Preview", warped_resized)
+            # 5) 프리뷰 사이즈로 리사이즈 + 표시
+            preview = cv2.resize(warped_color, (min(new_w, 900), min(new_h, 900)))
+            cv2.imshow("Warped Board Preview", preview)
 
 
-        circles = self.get_obstacle_circles_cm()  # [(cx, cy, r), ...]
-        tag_info["obstacle_circles_cm"] = circles
-        
+            if not hasattr(self, "prev_tick"):
+                self.prev_tick = cv2.getTickCount()
+            else:
+                curr_tick = cv2.getTickCount()
+                time_diff = (curr_tick - self.prev_tick) / cv2.getTickFrequency()
+                if time_diff > 0:
+                    self.fps = 1.0 / time_diff
+                self.prev_tick = curr_tick
+
+            # if self.frame_count % 10 == 0:
+            #     print(f"[FPS] {self.fps:.2f}")
+
+
         return {
             "frame": display_frame,
             "tag_info": tag_info,
@@ -276,14 +273,11 @@ class VisionSystem:
     # 외부 이벤트 처리용 API들
     def lock_board(self):
         self.board.lock()
-        if self._last_roi_bbox is not None:
-            self._locked_roi_bbox = tuple(self._last_roi_bbox)
 
     def reset_board(self):
         self.board.reset()
         self.last_valid_result = None
-        self._locked_roi_bbox = None
-
+        self.obstacle_locked_once = False
 
     def toggle_visualization(self):
         self.visualize = not self.visualize
@@ -415,58 +409,6 @@ class VisionSystem:
                 data['yaw_to_north_deg'] = delta_deg
                 data['yaw_to_north_rad'] = math.radians(delta_deg)
     
-        # === 목표 셀(center) → 현재 로봇 기준 극좌표(거리cm, 상대각deg) 계산 ===
-    def get_cell_center_cm(self, row: int, col: int) -> Optional[tuple[float, float]]:
-        """
-        보드가 lock이고 grid_reference가 있을 때, (row, col) 셀 중심(cm) 반환
-        """
-        if not (self.board_result and self.board.is_locked and self.board_result.grid_reference):
-            return None
-        if not (0 <= row < self.grid_row and 0 <= col < self.grid_col):
-            return None
-        centers = self.board_result.grid_reference["cell_centers"]
-        idx = row * self.grid_col + col
-        if idx >= len(centers):
-            return None
-        cx, cy = centers[idx]
-        return float(cx), float(cy)
-
-    @staticmethod
-    def _normalize_delta_deg(delta: float) -> float:
-        # –180° ~ +180° 범위로 정규화
-        return ((delta + 180.0) % 360.0) - 180.0
-
-    def compute_goal_polar(self, tag_infos: dict[int, dict], tag_id: int,
-                           target_row: int, target_col: int) -> Optional[tuple[float, float]]:
-        """
-        입력: tag_infos(=tag_info), tag_id, 목표 (row,col)
-        출력: (거리 cm, 상대각 deg) — send_center_align 포맷과 동일 의미
-        """
-        # 현재 로봇 상태
-        data = tag_infos.get(int(tag_id))
-        if not data or data.get("status") != "On":
-            return None
-        cur = data.get("center_cm")
-        yaw_front = data.get("yaw_front_deg")  # 전면(바디) 각도 (deg)
-        if cur is None or yaw_front is None:
-            return None
-
-        # 목표 셀 중심
-        goal = self.get_cell_center_cm(target_row, target_col)
-        if goal is None:
-            return None
-
-        # 벡터/거리/각도
-        gx, gy = goal
-        x, y = cur
-        dx, dy = (x - gx), (y - gy)
-        dist_cm = float((gx - x)**2 + (gy - y)**2) ** 0.5
-        yaw_goal = math.degrees(math.atan2(dy, dx))
-        rel = self._normalize_delta_deg(yaw_goal - float(yaw_front))
-
-        return dist_cm, rel
-
-
     def to_original_coords(self, x, y):
             orig_h, orig_w = self.frame_shape
             disp_w, disp_h = self.display_size
@@ -475,7 +417,7 @@ class VisionSystem:
             return orig_x, orig_y
 
                 
-    def draw_tag_overlay(self, frame, tag_info):
+    def draw_tag_overlay(self, frame, tag_info, path_viz_data: Optional[Dict] = None):
         for tag_id, data in tag_info.items():
             if data.get("status") != "On":
                 continue
@@ -484,74 +426,102 @@ class VisionSystem:
             if board_tag is not None and tag_id == board_tag['id']:
                 continue
 
-            # 원래 태그 위치(빨간 원)
-            cx_px, cy_px = data.get("center_raw", (None, None))
-            if cx_px is None or self.board_result is None:
-                continue
-            center_raw = (int(cx_px), int(cy_px))
-            cv2.circle(frame, center_raw, 6, (0, 0, 255), 2)
-
-            # 보정 중심(파란 원)
+            # 보정된 태그 중심 (파란 원)
             corr_x_px, corr_y_px = data.get("center", (None, None))
             if corr_x_px is None or corr_y_px is None:
                 continue
-            center = (int(corr_x_px), int(corr_y_px))
-            cv2.circle(frame, center, 6, (255, 0, 0), 2)
+            center_px = (int(corr_x_px), int(corr_y_px))
+            cv2.circle(frame, center_px, 6, (255, 0, 0), 2)
+            
+            yaw_val = data.get("yaw_front_deg")
+            if yaw_val is not None:
+                yaw_text = f"YAW: {yaw_val:.1f}"
+                # 텍스트 위치를 ID 표시(녹색)와 겹치지 않게 조정
+                cv2.putText(frame, yaw_text, (center_px[0] + 15, center_px[1] - 15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 128, 0), 2) # 진한 녹색
 
-            # 그리드 중심과 보정된 좌표를 잇는 선 그리기 및 거리/각도 표시
-            if self.board_result and self.board_result.grid_reference and \
-               center is not None and data.get("grid_position") is not None:
-                ref = self.board_result.grid_reference
-                H_inv = np.linalg.inv(ref["H_metric"])
+            # 시각화 정보 그리기 (경로 주행 여부에 따라 분기)
+            # C를 눌러 경로 주행을 시작하면 path_viz_data에 정보가 들어옴
+            viz_info = path_viz_data.get(str(tag_id)) if path_viz_data else None
+
+            if viz_info and self.board_result and self.board_result.grid_reference:
+                # --- 경로 주행 중: 보라색 정보 표시 ---
+                H_inv = np.linalg.inv(self.board_result.grid_reference["H_metric"])
+                ref_centers_cm = self.board_result.grid_reference["cell_centers"]
+                
+                cmd = viz_info.get("cmd")
+                dst_cell = viz_info.get("dst")
+                
+                # 목적지 좌표 계산
+                dst_r, dst_c = dst_cell
+                idx = dst_r * self.grid_col + dst_c
+                
+                if idx < len(ref_centers_cm):
+                    dst_cm = np.array([ref_centers_cm[idx]], dtype=np.float32).reshape(-1, 1, 2)
+                    dst_px = cv2.perspectiveTransform(dst_cm, H_inv)[0][0]
+                    dst_pt = (int(dst_px[0]), int(dst_px[1]))
+
+                    # 보라색 선 그리기
+                    cv2.line(frame, center_px, dst_pt, (255, 0, 255), 2)
+
+                    # 회전각/거리 계산 및 표시 (RobotController 로직과 동일하게)
+                    current_cm = data.get("center_cm")
+                    current_yaw = data.get("yaw_front_deg")
+
+                    text = ""
+                    target_yaw = None
+                    if cmd == "Stay":
+                        text = "Stay: 0.0deg, 0.0cm"
+                    elif current_cm and current_yaw is not None:
+                        vec = np.array(ref_centers_cm[idx]) - np.array(current_cm)
+                        dist_cm = np.linalg.norm(vec)
+
+                        vec_for_angle = vec.copy()
+                        vec_for_angle[1] = -vec_for_angle[1] # Y축 반전
+                        target_yaw = math.degrees(math.atan2(-vec_for_angle[1], vec_for_angle[0])) +180
+                        
+                        delta = ((target_yaw - current_yaw + 180) % 360) - 180
+                        
+                        deg = round(delta, 1)
+                        LR = f"L{abs(deg)}" if delta < 0 else f"R{deg}"
+                        text = f"{LR}, {dist_cm:.1f}cm"
+
+                    if text:
+                        cv2.putText(frame, text, (center_px[0] + 5, center_px[1] + 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                    if target_yaw is not None:    
+                        target_yaw_text = f"T.YAW: {target_yaw:.1f}"
+                        cv2.putText(frame, target_yaw_text, (center_px[0] + 5, center_px[1] + 70),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+
+            elif self.board_result and self.board_result.grid_reference:
+                # --- 평상시: 기존 빨간색 정보 표시 ---
+                H_inv = np.linalg.inv(self.board_result.grid_reference["H_metric"])
+                ref_centers_cm = self.board_result.grid_reference["cell_centers"]
+                
                 row, col = data.get("grid_position", (None, None))
                 if row is not None:
                     idx = row * self.grid_col + col
-                    if idx < len(ref["cell_centers"]):
-                        # cm → 픽셀 변환
-                        grid_cm = np.array([ref["cell_centers"][idx]], dtype=np.float32).reshape(-1, 1, 2)
+                    if idx < len(ref_centers_cm):
+                        grid_cm = np.array([ref_centers_cm[idx]], dtype=np.float32).reshape(-1, 1, 2)
                         gx, gy = cv2.perspectiveTransform(grid_cm, H_inv)[0][0]
                         grid_pt = (int(gx), int(gy))
 
                         # 붉은 선
-                        cv2.line(frame, grid_pt, center, (0, 0, 255), 2)
+                        cv2.line(frame, grid_pt, center_px, (0, 0, 255), 2)
 
-                        # 거리·각도 텍스트     
+                        # 거리·각도 텍스트
                         dist = data.get("dist_cm")
                         rel = data.get("relative_angle_deg")
                         if dist is not None and rel is not None:
                             deg = int(abs(round(rel)))
                             LR = f"L{deg}" if rel < 0 else f"R{deg}"
                             text = f"{LR}, {dist:.1f}cm"
-                            cv2.putText(frame, text,
-                                        (center[0] + 5, center[1] + 50),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.5, (0, 0, 255), 1)
-                            
-                        # 북쪽 기준 yaw_front 차이 표기 (사전 계산값 사용)
-                        n_front = data.get("yaw_front_to_north_deg")
-                        if n_front is not None:
-                            text = f"N: {n_front:+.1f}°"
-                            cv2.putText(frame, text,
-                                        (center[0] + 5, center[1] + 65),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.5, (255, 255, 0), 1)
-
-                        # 헤딩 방향 표시 (사전 계산된 스냅/오차 사용)
-                        base_dir = data.get("heading_base_dir")
-                        delta = data.get("heading_offset_deg")
-                        if base_dir is not None and delta is not None:
-                            if delta < -45 or delta > 45:
-                                heading_str = f"{base_dir}:ERR"
-                            else:
-                                sign = "+" if delta >= 0 else "-"
-                                heading_str = f"{base_dir}:{sign}{abs(round(delta, 1)):.1f}"
-                            cv2.putText(frame, f"H: {heading_str}",
-                                        (center[0] + 5, center[1] + 80),
-                                        cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.5, (0, 255, 255), 1)
+                            cv2.putText(frame, text, (center_px[0] + 5, center_px[1] + 50),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                                         
-                        if getattr(self, "show_pairwise_distances", True):
-                            import math
+                        if getattr(self, "show_pairwise_distances", False):
+                            
 
                             ex = getattr(self, "exclude_ids_for_distance", set())
                             items = []
@@ -589,46 +559,9 @@ class VisionSystem:
                                                 font_scale, (0, 0, 0), label_thick + 2)
                                     cv2.putText(frame, label, pos, cv2.FONT_HERSHEY_SIMPLEX,
                                                 font_scale, label_color, label_thick)
-            # 1) 속도(cm/s) 텍스트
-            speed = data.get("speed_cmps")      # TrackingManager가 채움
-            if speed is not None:
-                cv2.putText(
-                    frame,
-                    f"V: {speed:.1f} cm/s",
-                    (center[0] + 5, center[1] + 95),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (0, 255, 0), 1
-                )
-
-            # 2) 속도 벡터(화살표) — cm 벡터를 H_inv로 픽셀에 투영
-            vel = data.get("velocity_cmps")     # (vx, vy) in cm/s
-            center_cm = data.get("coordinates") or data.get("center_cm")
-            if (
-                vel is not None and center_cm is not None and
-                self.board_result is not None and
-                self.board_result.grid_reference is not None
-            ):
-                vx, vy = vel
-                # 화살표 길이를 “시간×속도(cm/s)”로 정해 가시화 (0.15초 등)
-                arrow_t = 0.15  # 0.15s 만큼 진행한 길이를 화살표로
-                x0_cm, y0_cm = center_cm
-                x1_cm = x0_cm + vx * arrow_t
-                y1_cm = y0_cm + vy * arrow_t
-
-                H_inv = np.linalg.inv(self.board_result.grid_reference["H_metric"])
-                base_cm = np.array([[[x0_cm, y0_cm]]], dtype=np.float32)
-                tip_cm  = np.array([[[x1_cm, y1_cm]]], dtype=np.float32)
-                base_px = cv2.perspectiveTransform(base_cm, H_inv)[0][0]
-                tip_px  = cv2.perspectiveTransform(tip_cm,  H_inv)[0][0]
-
-                cv2.arrowedLine(
-                    frame,
-                    (int(base_px[0]), int(base_px[1])),
-                    (int(tip_px[0]),  int(tip_px[1])),
-                    (0, 255, 0), 2, tipLength=0.3
-                )
-            # ─────────────────────────────────────────────────────────────
                 
+# visionsystem_mjk.py 파일의 _compute_roi 메서드를 아래 코드로 교체하세요.
+
     def _compute_roi(
         self,
         raw_gray: np.ndarray,
@@ -641,19 +574,15 @@ class VisionSystem:
     ) -> Tuple[np.ndarray, Tuple[int,int,int,int]]:
         """
         우선순위:
-        1) board.is_locked
+        1) board.is_locked (sh버전에서는 비어있었지만, board_result 기반으로 대체)
         2) 수동 ROI
         3) Tag 기반 ROI
         4) 전체 화면
         """
         h, w = frame_shape[:2]
 
-        # (A) 보드가 잠겨 있으면: 잠금 시점 ROI 그대로 사용 (불변)
-        if board.is_locked and self._locked_roi_bbox is not None:
-            x_min, y_min, x_max, y_max = self._locked_roi_bbox
-
-        # (B) 아직 잠기지 않았고, 보드 결과가 있으면: bbox ± 20% 마진
-        elif board_result is not None and getattr(board_result, "corners", None) is not None:
+        # 1순위. 보드 결과가 있으면: bbox ± 20% 마진 (sh 버전의 개선된 기능)
+        if board_result is not None and getattr(board_result, "corners", None) is not None:
             corners = board_result.corners.astype(int)
             xs, ys = corners[:,0], corners[:,1]
             x_min, x_max = xs.min(), xs.max()
@@ -702,71 +631,41 @@ class VisionSystem:
         self._last_roi_bbox = (x_min, y_min, x_max, y_max)
         return roi, (x_min, y_min, x_max, y_max)
     
-
-    def get_obstacle_centers_cm(self) -> list[tuple[int,int, float, float]]:
+    def cm_to_warp_px(self, x_cm: float, y_cm: float) -> tuple[int, int] | None:
         """
-        현재 보드 잠금 상태와 obstacle grid가 있을 때,
-        장애물 셀의 (row, col, cx_cm, cy_cm) 리스트를 반환.
+        보드의 cm 좌표를 warp된 보드 이미지 좌표(px)로 변환
         """
-        out: list[tuple[int,int,float,float]] = []
-        if self._last_obstacle_grid is None:
-            return out
-        if not (self.board_result and self.board.is_locked and self.board_result.grid_reference):
-            return out
-
-        occ = self._last_obstacle_grid  # shape=(rows, cols), {0,1}
-        for r in range(occ.shape[0]):
-            for c in range(occ.shape[1]):
-                if int(occ[r, c]) != 1:
-                    continue
-                center = self.get_cell_center_cm(r, c)  # cm 좌표 (보드 기준)
-                if center is None:
-                    continue
-                cx, cy = center
-                out.append((r, c, float(cx), float(cy)))
-        return out
-
-    def get_obstacle_circles_cm(self, square_side_cm: float = 10.0) -> list[tuple[float,float,float]]:
-        """
-        장애물을 '가운데 10×10cm 정사각형'의 외접원으로 근사한 충돌원 리스트를 반환.
-        반환: [(cx_cm, cy_cm, radius_cm), ...]
-        """
-        centers = self.get_obstacle_centers_cm()
-        if not centers:
-            return []
-        # 10×10 정사각형의 외접원 반지름 = sqrt(5^2 + 5^2) = 7.071...
-        half = square_side_cm * 0.5
-        r_obs = (half**2 + half**2) ** 0.5
-        return [(cx, cy, float(r_obs)) for (_r, _c, cx, cy) in centers]
-
-    # ===== 워프 평면 픽셀 좌표 유틸(시각화 전용) =====
-    def cm_to_warp_px(self, x_cm: float, y_cm: float) -> tuple[int,int] | None:
-        if self.board_result is None:
+        if not (self.board_result and self.board.is_locked):
             return None
-        cx_per_px, cy_per_px = self.board_result.cm_per_px
-        sx = 1.0 / max(cx_per_px, 1e-6)
-        sy = 1.0 / max(cy_per_px, 1e-6)
-        x_px = int(round(x_cm * sx))
-        y_px = int(round(y_cm * sy))
 
-        # === margin 보정 추가 ===
-        margin_ratio = self.frame_margin_ratio
-        margin_x = int(round(self.board_result.width_px * margin_ratio))
-        margin_y = int(round(self.board_result.height_px * margin_ratio))
-        x_px += margin_x
-        y_px += margin_y
+        w_px = int(self.board_result.width_px)
+        h_px = int(self.board_result.height_px)
 
+        m = getattr(self, "frame_margin_ratio", 0.05)
+        new_w = int(round(w_px * (1 + 2*m)))
+        new_h = int(round(h_px * (1 + 2*m)))
+        pad_w = int(round(new_w * m))
+        pad_h = int(round(new_h * m))
+
+        # cm 좌표 → 픽셀 좌표 (warp 캔버스 기준)
+        x_px = int(round(pad_w + x_cm * (w_px / board_width_cm)))
+        y_px = int(round(pad_h + y_cm * (h_px / board_height_cm)))
         return (x_px, y_px)
 
-    def cell_to_warp_px(self, row: int, col: int) -> tuple[int,int] | None:
+    def cell_to_warp_px(self, row: int, col: int) -> tuple[int, int] | None:
         """
-        (row,col) 셀 중심(cm)을 구해 워프된 보드 이미지 픽셀 좌표로 변환
+        보드의 grid 셀(row, col)을 warp된 보드 이미지 좌표(px)로 변환
         """
-        center = self.get_cell_center_cm(row, col)  # (cx_cm, cy_cm)
-        if center is None:
+        if not (self.board_result and self.board.is_locked and self.board_result.grid_reference):
             return None
-        return self.cm_to_warp_px(center[0], center[1])
 
+        centers = self.board_result.grid_reference["cell_centers"]
+        idx = row * self.grid_col + col
+        if idx < 0 or idx >= len(centers):
+            return None
+
+        cx_cm, cy_cm = centers[idx]
+        return self.cm_to_warp_px(cx_cm, cy_cm)
 
 
 class ROIFilter:
@@ -778,10 +677,10 @@ class ROIFilter:
         adaptive_block: int = 21,
         adaptive_C: int = 5,
         # --- Enhancement pipeline ---
-        scale_enh: int = 2,
-        unsharp_ksize: Tuple[int,int] = (9,9),
-        unsharp_sigma: float = 10,
-        clahe_clip_enh: float = 3.0,
+        scale_enh: int = 1,
+        unsharp_ksize: Tuple[int,int] = (7,7),
+        unsharp_sigma: float = 7,
+        clahe_clip_enh: float = 4.0,
         clahe_tile_enh: Tuple[int,int] = (8,8),
         bilateral_d: int = 9,
         bilateral_sigma_color: float = 75,
@@ -854,23 +753,23 @@ class ROIFilter:
         4) Bilateral Filter (엣지 보존 스무딩)  
         """
         # 1) Upscale
-        up = cv2.resize(
-            img, None,
-            fx=self.scale_enh, fy=self.scale_enh,
-            interpolation=cv2.INTER_CUBIC
-        )
+        if getattr(self, "scale_enh", 1) == 1:
+            up = img
+        else:
+            up = cv2.resize(
+                img, None,
+                fx=self.scale_enh, fy=self.scale_enh,
+                interpolation=cv2.INTER_CUBIC
+            )
 
         # 2) Unsharp mask
         blur = cv2.GaussianBlur(up, self.unsharp_ksize, self.unsharp_sigma)
         sharp = cv2.addWeighted(up, 1.5, blur, -0.5, 0)
 
         # 3) CLAHE
-        clahe = cv2.createCLAHE(
-            clipLimit=self.clahe_clip_enh,
-            tileGridSize=self.clahe_tile_enh
-        )
-        enhanced = clahe.apply(sharp)
-
+        clahe = cv2.createCLAHE(clipLimit=self.clahe_clip_enh, tileGridSize=self.clahe_tile_enh)
+        enhanced =  clahe.apply(sharp)
+        return enhanced
         # 4) Bilateral
         return cv2.bilateralFilter(
             enhanced,

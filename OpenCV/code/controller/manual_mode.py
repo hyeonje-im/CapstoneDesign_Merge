@@ -12,7 +12,7 @@ manual_mode.py — 외부 수동 경로 시스템 (Global MANUAL/CBS 토글)
 통합 가이드 (main.py 변경 최소화)
 ---------------------------------------------------
 # 1) import 및 인스턴스 생성 (main.py 상단 또는 초기화 위치)
-from controller.manual_mode import ManualPathSystem
+from manual_mode import ManualPathSystem
 manual = ManualPathSystem(
     get_selected_rids=lambda: SELECTED_RIDS,           # main이 유지하는 선택 집합
     get_preset_ids=lambda: PRESET_IDS,                 # 현재 보이는/접속중 로봇 ID 목록
@@ -220,17 +220,8 @@ class ManualPathSystem:
                 print(f"  ↳ 빈 경로: {sorted(empty)}")
             return
 
-        from typing import Dict
-        step_cell_plan: Dict[int, Dict[str, Dict]] = {}
-        for rid in cmd_map.keys():
-            path = self.manual_paths.get(int(rid), [])
-            steps = list(zip(path, path[1:]))  # [(src,dst), …]
-            for s_idx, (src, dst) in enumerate(steps):
-                step_cell_plan.setdefault(s_idx, {})[str(rid)] = {"src": tuple(src), "dst": tuple(dst)}
-
-
         print("▶ [MANUAL] 순차 전송 시작:", cmd_map)
-        self.start_sequence(cmd_map, step_cell_plan)
+        self.start_sequence(cmd_map)
 
     def reset_paths(self) -> None:
         self.manual_paths.clear()

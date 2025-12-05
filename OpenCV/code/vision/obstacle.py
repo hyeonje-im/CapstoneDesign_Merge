@@ -14,7 +14,7 @@ class ObstacleDetector:
         self,
         grid_rows: int,
         grid_cols: int,
-        block_size_cm: float = 10.0,   # 블록 윗면 한 변(cm)
+        block_size_cm: float = 7.0,   # 블록 윗면 한 변(cm)
         thresh_gray: int = 120,         # gray <= T → 검정
         roi_scale: float = 1.3,        # ROI 스케일(1.0~3.0)
         min_black_ratio: float = 0.50  # ROI 내 검정 비율 임계

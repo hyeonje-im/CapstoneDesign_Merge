@@ -3,7 +3,7 @@ import numpy as np
 
 def camera_open(source=None):
     if source is None:
-        preferred_order = [ 1,0]
+        preferred_order = [1,0]
         for cam_id in preferred_order:
             cap = cv2.VideoCapture(cam_id)
             if cap.isOpened():

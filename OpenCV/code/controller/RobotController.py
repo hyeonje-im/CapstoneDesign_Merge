@@ -1,8 +1,7 @@
-
 # import time
 # import json
 # import paho.mqtt.client as mqtt
-# from controller.align import send_center_align, send_north_align 
+# from align import send_center_align, send_north_align 
 # from config import MQTT_TOPIC_COMMANDS_, MQTT_PORT, IP_address_ ,NORTH_TAG_ID
 # import threading
 
@@ -11,12 +10,10 @@
 import json
 import time
 import threading
-from controller.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
-import math
+from OpenCV.code.align import send_center_align, send_north_align, send_direction_align  # :contentReference[oaicite:1]{index=1}
 from typing import Optional, Callable
-from config import corridor_width
-from controller.corridor_inspector import CorridorInspector
-from controller.collision_guard import GuardConfig
+import math  # 추가
+import numpy as np  # 추가
 
 class RobotController:
     def __init__(
@@ -24,32 +21,49 @@ class RobotController:
         client,
         mqtt_topic_commands: str,
         *,
+        grid_col: int, # <-- [1] 추가
         done_topic: str = "robot/done",
         north_tag_id: int | None = None,
         direction_corr_threshold_deg: float = 3.0,
-        alignment_delay_sec: float = 0.5,
+        alignment_delay_sec: float = 0.2,
+        step_transition_delay_sec: float = 0.2,
         alignment_angle: float = 1.0,
         alignment_dist: float = 1.0,
+        
     ):
-        # 통신
+        # ▼▼▼▼▼ [추가] 관성 제어를 위한 변수 ▼▼▼▼▼
+        # 이 각도(도) 이상일 때 회전/직진 명령을 분리합니다. (90도는 분리 안 함)
+        self.large_angle_threshold_deg = 150.0 
+        # 회전 완료(DONE) 후 직진을 보내기 전까지 PC에서 대기할 시간(초)
+        self.large_angle_settle_delay_sec = 0.25  # 250ms
+        # 분리된 직진 명령을 임시 저장하는 곳 {rid: "F15_modeA"}
+        self._pending_move_cmd: dict[str, str] = {}
+        # ▲▲▲▲▲ [추가] ▲▲▲▲▲
+        
         self.client = client
         self.mqtt_topic_commands = mqtt_topic_commands
         self.done_topic = done_topic
         self.north_tag_id = north_tag_id  # 필요 없으면 None
+        self.sequence_completion_callback = None
+        self.robot_completion_callback = None
 
         # 튜너블 파라미터
         self.direction_corr_threshold_deg = direction_corr_threshold_deg
         self.alignment_angle = alignment_angle
         self.alignment_dist = alignment_dist
         self.alignment_delay_sec = alignment_delay_sec
+        self.step_transition_delay_sec = step_transition_delay_sec
 
         # 외부 데이터 공급자
         self.tag_info_provider = None  # lambda: dict
+        self.board_info_provider = None # <-- [2] 추가
+        
 
         # 런타임 상태
         self.active = False
         self.current_step = 0
         self.max_steps = 0
+        self.grid_col = grid_col # <-- [3] 추가
         
         self.step_inflight: set[str] = set()
         self.step_done: set[str] = set()
@@ -63,15 +77,66 @@ class RobotController:
         self.paused_robots: set[str] = set()
         self.alignment_pending: dict[str, dict] = {}  # {rid: {"mode":..., "in_progress":bool}}
         self.inflight: dict[str, bool] = {}  # (옵션) 로봇별 실행중 표시
-        self.corridor_inspector = CorridorInspector(GuardConfig())
-        self.corridor_hold: set[str] = set()   # 회랑 차단으로 보류된 로봇(이번 스텝)
-        self._pending_re: set[str] = set()     # 회랑 차단으로 보류된 RE 대상(스텝 외부일 수 있음)
-        self.postfix_fixup: set[str] = set()   # 도착 후 보정 진행중인 로봇
+        self._last_align_ok_ts = {}
+        self._align_cb = None
+        self._robot_done_cb = None
+        self._last_align_ok_ts = {}
+        self.defer_pause_all = False
 
+        #!!! 수정됨
+        self.run_id: int = 0         
+        self.log_start_ts = time.time()
+        self.log_records: list[dict] = [] 
+
+        
+    def set_sequence_completion_callback(self, callback: Callable[[], None]):
+        """전체 시퀀스 완료 시 호출될 콜백 함수를 등록합니다."""
+        self.sequence_completion_callback = callback
+        
+    def set_robot_completion_callback(self, callback: Callable[[str], None]):
+        """개별 로봇이 자신의 경로를 모두 마쳤을 때 호출될 콜백 함수를 등록합니다."""
+        self.robot_completion_callback = callback
+        
+    def stop_sequence(self):
+        """진행 중인 시퀀스를 즉시 중단합니다."""
+        if self.active:
+            print("⏹️ [Controller] 외부 요청으로 시퀀스를 중단합니다.")
+            self.active = False
+            self.step_inflight.clear()
+            self.step_done.clear()
     # ===== 외부 연결 =====
     def set_tag_info_provider(self, fn):
         """fn() -> 최신 tag_info(dict)"""
         self.tag_info_provider = fn
+        
+    def set_board_info_provider(self, fn):
+        """fn() -> 최신 board_result (VisionSystem의 결과 객체)"""
+        self.board_info_provider = fn
+
+    def _normalize_delta_deg(self, delta):
+        """각도 정규화: –180° ~ +180°"""
+        return ((delta + 180) % 360) - 180
+
+    def get_step_counts(self) -> dict[str, int]:
+        return dict(self.robot_indices)
+
+    def get_step_count(self, rid: int | str) -> int:
+        return self.robot_indices.get(str(rid), 0)
+
+    #!!! 수정됨===== 실험 로그 헬퍼 =====
+    def start_new_run(self):
+        """메인에서 호출: run_id를 올리고, 기준 시간을 초기화"""
+        self.run_id += 1
+        self.log_start_ts = time.time()
+
+    def get_log_records(self):
+        """메인에서 CSV로 저장할 때 사용 (깊은 복사까진 필요 없으면 그대로 리턴해도 OK)"""
+        return self.log_records
+
+    def clear_log_records(self):
+        """CSV로 저장한 뒤 버퍼 비울 때 사용"""
+        self.log_records.clear()
+    # ================================
 
     # ===== 퍼블릭 API =====
     def start_sequence(self, cmd_map: dict[str, list[str]], step_cell_plan: dict[int, dict[str, dict]] | None = None) -> None:
@@ -85,6 +150,10 @@ class RobotController:
         # 상태 초기화
         self.robot_indices = {rid: 0 for rid in self.robot_command_map}
         self.inflight = {rid: False for rid in self.robot_command_map}
+        try:
+            self._release(list(self.robot_command_map.keys()))  # 모든 대상에게 RE 전송
+        except Exception:
+            pass
         self.paused_robots.clear()
         self.alignment_pending.clear()
 
@@ -98,230 +167,279 @@ class RobotController:
         self.step_inflight.clear()
         self.step_done.clear()
         self.active = True
-        self.postfix_fixup.clear()
 
         print(f"▶ 배리어 모드 시작: 총 스텝 {self.max_steps}, 대상 {sorted(list(self.robot_command_map.keys()))}")
         self._send_step_commands()
 
     # ===== 내부 구현 =====
+
     def _send_step_commands(self) -> None:
-        """이번 스텝 명령을 중앙 명령 토픽으로 publish"""
-        if not self.active:
-            return
+            """이번 스텝 명령을 중앙 명령 토픽으로 publish"""
+            if not self.active:
+                return
 
-        # 스텝 집합 초기화
-        self.step_inflight = set()
-        self.step_done = set()
-        self.step_yield = set()
-        self._pending_moves = {}
-        self.yield_block_cell.clear()
+            # 스텝 집합 초기화
+            self.step_inflight = set()
+            self.step_done = set()
+            self.step_yield = set()
+            self._pending_moves = {}
+            self.yield_block_cell.clear()
 
-        # 이번 스텝에 아직 명령이 남은 로봇
-        participants = [
-            rid for rid, cmds in self.robot_command_map.items()
-            if self.current_step < len(cmds)
-        ]
-        if not participants:
-            print("\n✅ [모든 명령 전송 완료] (no participants)")
-            self.active = False
-            return
+            participants = [
+                rid for rid, cmds in self.robot_command_map.items()
+                if self.current_step < len(cmds)
+            ]
+            if not participants:
+                print("\n✅ [모든 명령 전송 완료] (no participants)")
+                self.active = False
+                return
 
-        # 일시정지된 로봇 제외
-        actual_targets = [rid for rid in participants if rid not in self.paused_robots]
-        if not actual_targets:
-            print(f"⏸ 모든 대상이 일시정지 → Step {self.current_step+1}/{self.max_steps} 대기")
-            return
+            actual_targets = [rid for rid in participants if rid not in self.paused_robots]
+            if not actual_targets:
+                print(f"⏸ 모든 대상이 일시정지 → Step {self.current_step+1}/{self.max_steps} 대기")
+                return
 
-        tag_info = self.tag_info_provider() if self.tag_info_provider else {}
-        # north = tag_info.get(self.north_tag_id, {}) if (tag_info and self.north_tag_id is not None) else {}
+            tag_info = self.tag_info_provider() if self.tag_info_provider else {}
+            board_result = self.board_info_provider() if self.board_info_provider else None
 
-        plan = self._step_cell_plan.get(self.current_step, {}) if hasattr(self, "_step_cell_plan") else {}
-        src_by_robot = {k: v.get("src") for k, v in plan.items()}
-        dst_by_robot = {k: v.get("dst") for k, v in plan.items()}
-        src_set = set(src_by_robot.values()) if src_by_robot else set()
+            plan = self._step_cell_plan.get(self.current_step, {}) if hasattr(self, "_step_cell_plan") else {}
+            src_by_robot = {k: v.get("src") for k, v in plan.items()}
+            dst_by_robot = {k: v.get("dst") for k, v in plan.items()}
+            src_set = set(src_by_robot.values()) if src_by_robot else set()
 
-        for rid in actual_targets:
-            cmd_raw = self.robot_command_map[rid][self.current_step]
-            cmd = cmd_raw
+            for rid in actual_targets:
+                cmd_raw = self.robot_command_map[rid][self.current_step]
+                cmd = cmd_raw
 
-            # Stay: 전송 없이 즉시 완료
-            if cmd == "Stay":
-                print(f"⏸ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → Stay (즉시 완료)")
-                self.inflight[rid] = False
-                self.robot_indices[rid] = self.current_step + 1
-                self.step_inflight.add(rid)
-                self.step_done.add(rid)
-                continue
+                if cmd == "Stay":
+                    print(f"⏸ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → Stay (즉시 완료)")
+                    self.inflight[rid] = False
+                    self.robot_indices[rid] = self.current_step + 1
+                    self.step_inflight.add(rid)
+                    self.step_done.add(rid)
+                    continue
+                
+                command_set = [{"command": cmd}]
+                two_stage_reason = "NONE"
 
-            # 전진 전 방향 오차 보정(2단계) 판단
-            pre_cmds: list[dict] = []
-            two_stage = False  # 기존 출력 표시에 사용
+                if (isinstance(cmd, str) and cmd.startswith("F") and
+                    board_result and hasattr(board_result, 'grid_reference') and board_result.grid_reference):
 
-            # tag_info에서 센서 yaw 읽기 (align와 동일 프레임: E=0,N=90,S=270,W=180)
-            cur_yaw = None
-            try:
-                cur_yaw = tag_info.get(int(rid), {}).get("yaw_front_deg", None)
-            except Exception:
-                cur_yaw = None
+                    robot_data = tag_info.get(int(rid))
+                    dst_cell = dst_by_robot.get(rid)
 
-            # (A) 큰 방위: 그리드 기반 '봐야 할 정방향'을 먼저 맞춘다 (모든 명령에 적용)
-            try:
-                desired = self._desired_cardinal_for_current_step(rid)
-                if (desired is not None) and (cur_yaw is not None):
-                    # 현재 yaw를 가장 가까운 NESW로 스냅 (align의 로직과 동일)
-                    yaw_deg = (float(cur_yaw) + 360.0) % 360.0
-                    bases = [90.0, 0.0, 270.0, 180.0]  # N,E,S,W
-                    diffs = [abs(((yaw_deg - a + 180.0) % 360.0) - 180.0) for a in bases]
-                    current_base = bases[diffs.index(min(diffs))]
+                    if robot_data and dst_cell:
+                        current_cm = robot_data.get("center_cm")
+                        current_yaw = robot_data.get("yaw_front_deg")
+                        cell_centers = board_result.grid_reference.get("cell_centers")
 
-                    # 정방향이 다르면 무조건 회전(modeOnly) 선행
-                    if current_base != float(desired):
-                        delta_big = self._normalize_delta_deg(yaw_deg - float(desired))
-                        rot_cmd = f"{'L' if delta_big > 0 else 'R'}{round(abs(delta_big),1)}_modeOnly"
-                        pre_cmds.append({"command": rot_cmd})
-            except Exception:
-                pass
+                        if current_cm and current_yaw is not None and cell_centers:
+                            try:
+                                r, c = dst_cell
+                                idx = r * self.grid_col + c
+                                target_cm = cell_centers[idx]
 
-            # (B) 미세 보정: heading_offset_deg (전진일 때만 기존 임계치로 추가)
-            delta = None
-            try:
-                delta = tag_info.get(int(rid), {}).get("heading_offset_deg", None) if tag_info else None
-            except Exception:
-                delta = None
+                                vec = np.array(target_cm) - np.array(current_cm)
+                                dist_cm = np.linalg.norm(vec)
 
-            try:
-                if (
-                    isinstance(cmd, str)
-                    and (cmd.startswith("F") or cmd.startswith("L") or cmd.startswith("R") or cmd.startswith("T"))
-                    and (delta is not None)
-                    and abs(float(delta)) >= float(self.direction_corr_threshold_deg)
-                ):
-                    angle = round(abs(float(delta)), 1)
-                    pre_cmds.append({"command": f"{'L' if float(delta) > 0 else 'R'}{angle}_modeOnly"})
-                    two_stage = True
-            except Exception:
-                pass
+                                if dist_cm > 0.5:
+                                    # 각도 계산 (기존 방식 유지: 시각계 보정 포함)
+                                    vec_for_angle = vec.copy()
+                                    vec_for_angle[1] = -vec_for_angle[1]
+                                    target_yaw = math.degrees(math.atan2(-vec_for_angle[1], vec_for_angle[0])) + 180
 
-            # (C) 최종 command_set 구성: 선행 회전들 + 원래 명령
-            command_set = pre_cmds + [{"command": cmd}]
+                                    delta = self._normalize_delta_deg(target_yaw - current_yaw)
 
-            # yield 판단
-            is_yield = False
-            if dst_by_robot:
-                my_dst = dst_by_robot.get(rid)
-                if my_dst and my_dst in src_set:
-                    is_yield = True
-                    self.step_yield.add(rid)
-                    self.yield_block_cell[rid] = my_dst
+                                    if cmd.startswith("T"):
+                                        print(f"🔵 [T-Command 보정] 원본 delta: {delta:.1f}°")
+                                        delta = self._normalize_delta_deg(delta + 5.0)
+                                        print(f"   => 보정 후 delta: {delta:.1f}°")
+                                    
+                                    # !!! 수정됨===== 여기부터 실험용 로그 기록 =====
+                                    try:
+                                        if self.tag_info_provider is not None:
+                                            tag_info = self.tag_info_provider()
+                                            # rid는 이 함수 안 for 루프에서 쓰는 로봇 ID (문자열)라고 가정
+                                            tag = tag_info.get(int(rid), {})
+                                            center_error_cm = tag.get("dist_cm", None)
 
-            # corridor preflight: 직진(MOVE) 묶음에 대해 회랑 검사
-            corridor_block = False
-            try:
-                if any(isinstance(x, dict) and isinstance(x.get("command"), str) and x["command"].startswith("F")
-                       for x in command_set):
-                    tag_now = self.tag_info_provider() if self.tag_info_provider else {}
-                    if not self.corridor_inspector.is_clear_for_move(rid, command_set, tag_now):
-                        corridor_block = True
-            except Exception:
-                corridor_block = False
+                                            if center_error_cm is not None:
+                                                now = time.time()
+                                                record = {
+                                                    "run_id": self.run_id,
+                                                    "time_s": now - self.log_start_ts,
+                                                    "robot_id": int(rid),
+                                                    "step_index": self.current_step,
+                                                    "center_error_cm": float(center_error_cm),
+                                                    "heading_correction_deg": float(delta),  # 다음 셀까지 보정량(부호 포함)
+                                                }
+                                                self.log_records.append(record)
+                                    except Exception as e:
+                                        # 로깅이 실험용이니까, 혹시 문제 나도 메인 로직은 안 죽게 그냥 경고만
+                                        print(f"[LOG] 기록 중 예외 발생: {e}")
+                                    # ===== 로그 기록 끝 =====
 
-            if corridor_block:
-                is_yield = True
-                self.step_yield.add(rid)
-                self.corridor_hold.add(rid)
-                self._pending_moves[rid] = {"command_set": command_set, "two_stage": two_stage}
-                print(f"⏸️ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → 회랑 보류(CPC-HOLD) (pkg={len(command_set)})")
-            elif is_yield:
-                # 블로킹 셀 보류(기존 로직)
-                self._pending_moves[rid] = {"command_set": command_set, "two_stage": two_stage}
-                print(f"⏸️ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → YIELD 보류 (pkg={len(command_set)})")
-            else:
-                payload = json.dumps({
-                    "commands": [{
-                        "robot_id": rid,
-                        "command_count": len(command_set),
-                        "command_set": command_set,
-                    }]
-                })
-                print(f"📤 [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → "
-                      f"{'dir-fix+MOVE' if two_stage else cmd}")
-                self.client.publish(self.mqtt_topic_commands, payload)
-                self.inflight[rid] = True
-                self.robot_indices[rid] = self.current_step + 1
-                self.step_inflight.add(rid)
+                                    # ✅ 항상 두 단계(회전 + 직진)로 보냄
+                                    rot_deg = round(abs(delta), 1)
+                                    if rot_deg < 0.1:
+                                        rot_deg = 0.1   # 0° 회전 방지용 최소각
+                                    rot_cmd_letter = 'R' if delta > 0 else 'L'
+                                    pre_cmd = f"{rot_cmd_letter}{rot_deg}_modeOnly"
+                                    mov_cmd = f"F{dist_cm:.1f}_modeA"
 
-        if self.step_yield:
-            self._start_yield_watchdog()
+                                    is_large_angle = abs(delta) >= self.large_angle_threshold_deg
+                                    if is_large_angle:
+                                        # [분리 전송] 직진은 보류하고 회전만 전송
+                                        self._pending_move_cmd[rid] = mov_cmd
+                                        command_set = [{"command": pre_cmd}]
+                                        two_stage_reason = "ALIGN_MOVE_SPLIT"
+                                    else:
+                                        # [기존 방식] 작은 각도는 한 번에 전송
+                                        command_set = [{"command": pre_cmd}, {"command": mov_cmd}]
+                                        two_stage_reason = "ALIGN_MOVE"
+                                    # ▲▲▲▲▲ [수정] ▲▲▲▲▲
+                                else:
+                                    command_set = [{"command": "Stay"}]
 
-        if self.step_inflight and self.step_done >= self.step_inflight:
-            self._advance_step_if_ready()
+                            except IndexError:
+                                print(f"⚠️ [Robot_{rid}] 목표 셀 인덱스 오류: {dst_cell}")
+                            except Exception as e:
+                                print(f"⚠️ [Robot_{rid}] 정렬 이동 계산 오류: {e}")
+                                
+                elif (isinstance(cmd, str) and (cmd.startswith("R") or cmd.startswith("L") or cmd.startswith("T")) and
+                    board_result and hasattr(board_result, 'grid_reference') and board_result.grid_reference):
+
+                    robot_data = tag_info.get(int(rid))
+                    dst_cell = dst_by_robot.get(rid)
+
+                    if robot_data and dst_cell:
+                        current_cm = robot_data.get("center_cm")
+                        current_yaw = robot_data.get("yaw_front_deg")   # 비전에서 계산된 현재 정면각(°)
+                        cell_centers = board_result.grid_reference.get("cell_centers")
+
+                        if current_cm and current_yaw is not None and cell_centers:
+                            try:
+                                r, c = dst_cell
+                                idx = r * self.grid_col + c
+                                target_cm = cell_centers[idx]
+
+                                # 다음 셀 중심까지의 벡터
+                                vec = np.array(target_cm) - np.array(current_cm)
+                                dist_cm = np.linalg.norm(vec)
+
+                                if dist_cm > 0.5:
+                                    # (비전과 동일한 방식) 각도 계산: 보라색 표기와 일치
+                                    vec_for_angle = vec.copy()
+                                    vec_for_angle[1] = -vec_for_angle[1]  # Y축 부호 반전
+                                    target_yaw = math.degrees(math.atan2(-vec_for_angle[1], vec_for_angle[0])) + 180.0
+
+                                    # 현재 각도 → 목표 각도까지 회전량(부호 유지, -180~+180 정규화)
+                                    delta = self._normalize_delta_deg(target_yaw - current_yaw)
+
+                                    # 회전 명령(항상 modeOnly). 명령에 적힌 숫자(R90 등)는 '무시'
+                                    rot_deg = round(abs(delta), 1)
+                                    if rot_deg < 0.1:
+                                        rot_deg = 0.1  # 0° 회전 방지
+                                    rot_cmd_letter = 'R' if delta > 0 else 'L'
+                                    rot_cmd = f"{rot_cmd_letter}{rot_deg}_modeOnly"
+
+                                    # 원래 의도 기반 속도 모드 고정: R/L → modeB, T → modeC
+                                    speed_mode = "modeB" if cmd[0] in ("R", "L") else "modeC"
+                                    mov_cmd = f"F{dist_cm:.1f}_{speed_mode}"
+
+                                    is_large_angle = abs(delta) >= self.large_angle_threshold_deg
+                                    if is_large_angle:
+                                        # [분리 전송] 직진은 보류하고 회전만 전송
+                                        self._pending_move_cmd[rid] = mov_cmd
+                                        command_set = [{"command": rot_cmd}]
+                                        two_stage_reason = "ROT→CENTER_MOVE_SPLIT"
+                                    else:
+                                        # [기존 방식] 작은 각도는 한 번에 전송
+                                        command_set = [{"command": rot_cmd}, {"command": mov_cmd}]
+                                        two_stage_reason = "ROT→CENTER_MOVE"
+                                    # ▲▲▲▲▲ [수정] ▲▲▲▲▲
+                                else:
+                                    command_set = [{"command": "Stay"}]
+
+                            except IndexError:
+                                print(f"⚠️ [Robot_{rid}] 목표 셀 인덱스 오류: {dst_cell}")
+                            except Exception as e:
+                                print(f"⚠️ [Robot_{rid}] 회전(보정) 후 중앙이동 계산 오류: {e}")
+
+                # if two_stage_reason != "ALIGN_MOVE":
+                #     delta = tag_info.get(int(rid), {}).get("heading_offset_deg")
+                #     if (isinstance(cmd, str) and cmd.startswith("F") and
+                #         delta is not None and abs(delta) >= self.direction_corr_threshold_deg):
+                        
+                #         angle = round(abs(delta), 1)
+                #         pre_cmd = f"{'L' if delta > 0 else 'R'}{angle}_modeOnly"
+                #         command_set = [{"command": pre_cmd}, {"command": cmd}]
+                #         two_stage_reason = "DIR_FIX"
+                
+                is_yield = False
+                if dst_by_robot:
+                    my_dst = dst_by_robot.get(rid)
+                    if my_dst and my_dst in src_set:
+                        is_yield = True
+                        self.step_yield.add(rid)
+                        self.yield_block_cell[rid] = my_dst
+
+                if is_yield:
+                    self._pending_moves[rid] = {"command_set": command_set, "two_stage_reason": two_stage_reason}
+                    print(f"⏸️ [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → YIELD 보류 (pkg={len(command_set)})")
+                else:
+                    payload = json.dumps({
+                        "commands": [{
+                            "robot_id": rid,
+                            "command_count": len(command_set),
+                            "command_set": command_set,
+                        }]
+                    })
+                    cmd_str = ' + '.join(c['command'] for c in command_set)
+                    print(f"📤 [Step {self.current_step+1}/{self.max_steps}] [Robot_{rid}] → {cmd_str} (reason: {two_stage_reason})")
+                    
+                    self.client.publish(self.mqtt_topic_commands, payload)
+                    self.inflight[rid] = True
+                    self.robot_indices[rid] = self.current_step + 1
+                    self.step_inflight.add(rid)
+
+            if self.step_inflight:
+                print(f"▶ Step {self.current_step+1}/{self.max_steps} 전송 대상: {sorted(list(self.step_inflight))}")
+
+            if self.step_yield:
+                self._start_yield_watchdog()
+            
+            if self.step_inflight and self.step_done >= self.step_inflight:
+                self._advance_step_if_ready()
 
     def _start_yield_watchdog(self) -> None:
-        # step watchdog + RE 보류 해제까지 함께 다룸
         if getattr(self, "_yield_watchdog_on", False):
             return
         self._yield_watchdog_on = True
         step_id = self.current_step
-
         def _loop():
             try:
-                while True:
-                    any_pending_step = self.active and self.current_step == step_id and self.step_yield and not (self.step_done >= self.step_inflight)
-                    any_pending_re = bool(self._pending_re)
-                    if not any_pending_step and not any_pending_re:
-                        break
-                    try:
-                        if any_pending_step:
-                            self._try_release_yielders()
-                        if any_pending_re:
-                            self._try_release_re()
-                    finally:
-                        time.sleep(0.1)
+                while self.active and self.current_step == step_id and self.step_yield and not (self.step_done >= self.step_inflight):
+                    self._try_release_yielders()
+                    time.sleep(0.1)
             finally:
                 self._yield_watchdog_on = False
         threading.Thread(target=_loop, daemon=True).start()
 
-    def _try_release_re(self) -> None:
-        if not self._pending_re:
-            return
-        tag_now = self.tag_info_provider() if self.tag_info_provider else {}
-        to_release = []
-        for rid in list(self._pending_re):
-            if self.corridor_inspector.is_clear_for_release(rid, tag_now):
-                # RE 전송
-                self.client.publish(f"robot/{rid}/cmd", "RE")
-                print(f"▶ [Robot_{rid}] 재개(RE) — 회랑 클리어")
-                to_release.append(rid)
-        for rid in to_release:
-            self._pending_re.discard(rid)
-
     # --- yield 해제 조건: '블로킹 셀'이 실제로 비었는지 확인 ---
     def _yield_release_ok(self, rid: str) -> bool:
-        if rid not in self.step_yield:
+        if rid not in self.step_yield: 
             return False
-
-        # 1) 블로킹 셀 해제 여부 (기존)
-        cell_ok = True
         cell = self.yield_block_cell.get(rid)
-        if cell:
-            tag_info = self.tag_info_provider() if self.tag_info_provider else {}
-            for tid, data in tag_info.items():
-                gp = data.get("grid_position")
-                if gp == cell and data.get("status") == "On":
-                    cell_ok = False
-                    break
-
-        # 2) 회랑 비었는지
-        corridor_ok = True
-        if rid in self.corridor_hold:
-            tag_now = self.tag_info_provider() if self.tag_info_provider else {}
-            pkg = self._pending_moves.get(rid, {})
-            cmdset = pkg.get("command_set", [])
-            corridor_ok = self.corridor_inspector.is_clear_for_move(rid, cmdset, tag_now)
-            if corridor_ok:
-                self.corridor_hold.discard(rid)
-
-        return cell_ok and corridor_ok
+        if not cell:
+            return True
+        tag_info = self.tag_info_provider() if self.tag_info_provider else {}
+        # grid_position이 있는 태그만 대상으로, '블로킹 셀'을 점유한 로봇이 없어야 함
+        for tid, data in tag_info.items():
+            gp = data.get("grid_position")
+            if gp == cell and data.get("status") == "On":
+                return False
+        return True
 
     def _try_release_yielders(self) -> None:
         if not self.active or not self.step_inflight:
@@ -341,12 +459,14 @@ class RobotController:
                     })
                     self.client.publish(self.mqtt_topic_commands, payload)
                 elif "command" in pkg:
+                    # 하위호환(혹시 남아있을 경우)
                     self._publish(rid, [{"command": pkg["command"]}])
                 released.append(rid)
         if released:
-            print(f"🚦 GO (보류 해제): {released}")
+            print(f"🚦 GO (YIELD 해제): {released}")
             for r in released:
                 self.step_yield.discard(r)
+                # 발사 후 나머지는 on_mqtt_message에서 DONE 집계
     
     def _advance_step_if_ready(self) -> None:
         """이번 스텝 대상 전원이 완료되면 다음 스텝으로"""
@@ -355,11 +475,38 @@ class RobotController:
         if self.step_inflight and self.step_done >= self.step_inflight:
             print(f"\n✅ Step {self.current_step+1}/{self.max_steps} 전체 완료 → 다음 스텝")
             self.current_step += 1
+            
+            if self.defer_pause_all:
+                targets = list(self.robot_command_map.keys())
+                self.pause(targets)                # S 송신 (다음 전송부터 보류)
+                self.defer_pause_all = False
+                print(f"⏸ 모든 대상 일시정지(스텝 경계) → 시퀀스 종료")
+                self.active = False
+                self.step_inflight.clear()
+                self.step_done.clear()
+                if self.sequence_completion_callback:
+                    self.sequence_completion_callback()
+                return
+                        
             if self.current_step >= self.max_steps:
                 print("\n✅ [모든 명령 전송 완료] (max steps reached)")
                 self.active = False
+
+                # ▼▼▼▼▼ [핵심] 이 두 줄이 "귀를 막는" 역할을 합니다 ▼▼▼▼▼
+                self.step_inflight.clear()
+                self.step_done.clear()
+                # ▲▲▲▲▲ [핵심] ▲▲▲▲▲
+                
+                if self.sequence_completion_callback:
+                    self.sequence_completion_callback()
                 return
-            self._send_step_commands()
+            #self._send_step_commands()
+            def _defer_and_send(step_id=self.current_step):
+                time.sleep(self.step_transition_delay_sec)
+                # 아직 동일 스텝이고, 시퀀스가 살아있을 때만 전송
+                if self.active and self.current_step == step_id:
+                    self._send_step_commands()
+            threading.Thread(target=_defer_and_send, daemon=True).start()
 
     def on_mqtt_message(self, topic: str, payload_raw: str) -> None:
         """MQTT 레이어에서 DONE 수신 시 호출해줄 콜백"""
@@ -383,6 +530,33 @@ class RobotController:
         print(f"✅ [Robot_{robot_id}] 명령 ({cmd_info}) 완료")
         if self.inflight is not None:
             self.inflight[robot_id] = False
+        
+        # ▼▼▼▼▼ [추가] 분리된 직진 명령(SPLIT) 처리 ▼▼▼▼▼
+        if "mode=modeOnly" in payload and robot_id in self._pending_move_cmd:
+            
+            # 1. 보류 중인 직진 명령을 가져오고 딕셔너리에서 제거
+            mov_cmd_str = self._pending_move_cmd.pop(robot_id, None)
+            
+            if mov_cmd_str:
+                print(f"▶ [Robot_{robot_id}] 회전(modeOnly) 완료. 관성 정착을 위해 {self.large_angle_settle_delay_sec}초 대기...")
+                
+                mov_cmd_set = [{"command": mov_cmd_str}]
+                
+                # 2. PC에서 지연 후 직진 명령을 전송하는 함수
+                def _send_pending_move():
+                    if not self.active: # 전송 직전 시퀀스가 중단됐으면 취소
+                        print(f"▶ [Robot_{robot_id}] (취소) 시퀀스가 중단되어 직진({mov_cmd_str})을 보내지 않습니다.")
+                        return
+                        
+                    print(f"▶ [Robot_{robot_id}] 지연 시간 종료. 직진({mov_cmd_str}) 전송 실행.")
+                    self._publish(robot_id, mov_cmd_set) 
+                    
+                # 3. 타이머 시작 (이 함수는 즉시 리턴됨)
+                threading.Timer(self.large_angle_settle_delay_sec, _send_pending_move).start()
+                
+                # 4. 이 modeOnly는 스텝 완료가 아니므로 여기서 함수 종료
+                return 
+        # ▲▲▲▲▲ [추가] ▲▲▲▲▲
 
         # ---------- (A) 정렬 반복: modeOnly 완료 후 지연 재시도 ----------
         if "mode=modeOnly" in payload and robot_id in self.alignment_pending:
@@ -415,18 +589,8 @@ class RobotController:
             elif mode == "direction":
                 if self.check_direction_alignment_ok(robot_id):
                     print(f"✅ 방향정렬 완료: Robot_{robot_id}")
+                    self._last_align_ok_ts[robot_id] = time.time()
                     self.clear_alignment_pending(robot_id)
-                    if robot_id in self.postfix_fixup:
-                        # 방향까지 끝났으므로 postfix 종료하고 스텝 완료 집계
-                        self.postfix_fixup.discard(robot_id)
-                        if self.active and (robot_id in self.step_inflight):
-                            self.step_done.add(robot_id)
-                            self.inflight[robot_id] = False
-                            print(f"🟢 [Step {self.current_step+1}/{self.max_steps}] 완료: {sorted(self.step_done)} / {sorted(self.step_inflight)}")
-                            self._try_release_yielders()
-                            self._advance_step_if_ready()
-                        return
-
                 elif not in_progress:
                     self.alignment_pending[robot_id]["in_progress"] = True
                     def after_delay():
@@ -445,24 +609,18 @@ class RobotController:
                 if self.check_center_alignment_ok(robot_id):
                     print(f"✅ 중앙정렬 완료: Robot_{robot_id}")
                     self.clear_alignment_pending(robot_id)
-
-                    # ⬇️ 추가: 도착 후 보정 시퀀스 마무리
-                    if robot_id in self.postfix_fixup:
-                        # 중앙은 맞췄으니 방향도 확인
-                        if not self.check_direction_alignment_ok(robot_id):
-                            # 방향이 남았으면 이어서 방향 정렬만 실시
-                            self.run_direction_align([robot_id], do_release=False)
-                            return  # 아직 스텝 완료 집계 금지
-                        # 둘 다 OK → postfix 종료 및 스텝 완료 집계
-                        self.postfix_fixup.discard(robot_id)
-                        if self.active and (robot_id in self.step_inflight):
-                            self.step_done.add(robot_id)
-                            self.inflight[robot_id] = False
-                            print(f"🟢 [Step {self.current_step+1}/{self.max_steps}] 완료: {sorted(self.step_done)} / {sorted(self.step_inflight)}")
-                            self._try_release_yielders()
-                            self._advance_step_if_ready()
-                        return
-
+                elif not in_progress:
+                    self.alignment_pending[robot_id]["in_progress"] = True
+                    def after_delay():
+                        if self.check_center_alignment_ok(robot_id):
+                            print(f"✅ 중앙정렬 완료 (지연 후 재확인): Robot_{robot_id}")
+                            self.clear_alignment_pending(robot_id)
+                            return
+                        # 🔁 기존: self._send_center_align([int(robot_id)])
+                        self.run_center_align([robot_id], do_release=False)
+                        if robot_id in self.alignment_pending:
+                            self.alignment_pending[robot_id]["in_progress"] = False
+                    _delay_then(after_delay)
 
 
         if robot_id in self.paused_robots:
@@ -470,36 +628,25 @@ class RobotController:
             sent = self.robot_indices.get(robot_id, 0)
             print(f"⏸ [Robot_{robot_id}] 개별 일시정지 상태 → 다음 전송 보류 (완료={sent}/{total})")
 
-        # --- [도착 후 보정 게이트] MOVE/straight/modeC DONE이면 집계 전에 거리/방향 점검 ---
-        is_mode_only = ("mode=modeOnly" in payload)
-        is_move_like = ("cmd=MOVE" in payload) or ("mode=straight" in payload) or ("mode=modeC" in payload)
-
-        # 스텝 참가자 DONE이고 modeOnly가 아니면(=실제 이동 계열)
-        if self.active and (robot_id in self.step_inflight) and (not is_mode_only):
-            # 아직 도착 후 보정 중이 아니면 검사 시작
-            if robot_id not in self.postfix_fixup:
-                # 1) 거리(중앙) 불일치면: 중앙정렬 시작하고 '완료집계'는 미룸
-                if not self.check_center_alignment_ok(robot_id):
-                    self.postfix_fixup.add(robot_id)
-                    self.run_center_align([robot_id], do_release=False)
-                    return  # ⬅️ 스텝 완료 집계 금지
-
-                # 2) 방향 불일치면: 방향정렬 시작하고 '완료집계'는 미룸
-                if not self.check_direction_alignment_ok(robot_id):
-                    self.postfix_fixup.add(robot_id)
-                    self.run_direction_align([robot_id], do_release=False)
-                    return  # ⬅️ 스텝 완료 집계 금지
-            # 여기까지 통과 == 둘 다 OK거나, 이미 postfix_fixup 중인데 일단 집계로 넘겨도 되는 케이스
-
-
-        if self.active and (robot_id in self.step_inflight) and ("mode=modeOnly" not in payload) \
-   and (robot_id not in self.alignment_pending) and (robot_id not in self.postfix_fixup):
+        if self.active and (robot_id in self.step_inflight):
+            if "mode=modeOnly" in payload:
+                # dir-fix+MOVE의 첫 단계(방향 보정) 완료는 스텝 진행에 영향을 주지 않으므로
+                # 여기서 아무것도 하지 않고 함수를 종료합니다.
+                return
+            # ▶ modeOnly(정렬) 외의 모든 DONE은 '이번 스텝 실제 명령' 완료로 집계
             self.step_done.add(robot_id)
             self.inflight[robot_id] = False
             print(f"🟢 [Step {self.current_step+1}/{self.max_steps}] 완료: {sorted(self.step_done)} / {sorted(self.step_inflight)}")
             # yield 로봇 출발 재확인 후, 스텝 전진
+            # 현재 완료된 스텝 번호(self.current_step + 1)가 해당 로봇의 전체 경로 길이와 같다면,
+            # 그 로봇은 방금 자신의 최종 목적지에 도착한 것입니다.
+            if (self.current_step + 1) == len(self.robot_command_map.get(robot_id, [])):
+                if self.robot_completion_callback:
+                    # 등록된 콜백 함수(random_manager의 함수)를 호출하여 보고합니다.
+                    self.robot_completion_callback(robot_id)
             self._try_release_yielders()
-            self._advance_step_if_ready()
+            if not self.step_yield:
+                self._advance_step_if_ready()
 
     # ===== 정렬 pending 관리 =====
     def set_alignment_pending(self, robot_id: str, mode: str):
@@ -605,18 +752,11 @@ class RobotController:
 
     # ---- 내부 유틸: 개별/일괄 release ----
     def _release(self, targets: list[int | str]) -> None:
-        """대상 로봇에 RE 전송 (정지 해제). 회랑 검사 후 전송/보류."""
-        tag_now = self.tag_info_provider() if self.tag_info_provider else {}
+        """대상 로봇에 RE 전송 (정렬/재개 전 준비)."""
         for rid in targets:
             rid = str(rid)
-            if self.corridor_inspector.is_clear_for_release(rid, tag_now):
-                self.client.publish(f"robot/{rid}/cmd", "RE")
-                print(f"▶ [Robot_{rid}] RE 전송")
-            else:
-                self._pending_re.add(rid)
-                print(f"⏸️ [Robot_{rid}] RE 보류(CPC-HOLD) — 회랑 점유")
-        if self._pending_re:
-            self._start_yield_watchdog()
+            self.client.publish(f"robot/{rid}/cmd", "RE")
+            print(f"▶ [Robot_{rid}] RE 전송")
 
     def _mark_pending(self, targets: list[int | str], mode: str) -> None:
         """alignment_pending 등록 헬퍼"""
@@ -633,88 +773,38 @@ class RobotController:
             print(f"🛑 [Robot_{rid}] 정지 예약(S)")
 
     def resume(self, targets: list[str]) -> None:
-        """특정 로봇만 재개(RE). 회랑 검사 후 전송/보류."""
-        tag_now = self.tag_info_provider() if self.tag_info_provider else {}
+        """특정 로봇만 재개."""
         for rid in targets:
             rid = str(rid)
             if rid in self.paused_robots:
                 self.paused_robots.remove(rid)
-            if self.corridor_inspector.is_clear_for_release(rid, tag_now):
-                self.client.publish(f"robot/{rid}/cmd", "RE")
-                print(f"▶ [Robot_{rid}] 재개(RE)")
-            else:
-                self._pending_re.add(rid)
-                print(f"⏸️ [Robot_{rid}] 재개 보류(CPC-HOLD) — 회랑 점유")
-        if self._pending_re:
-            self._start_yield_watchdog()
+            self.client.publish(f"robot/{rid}/cmd", "RE")
+            print(f"▶ [Robot_{rid}] 재개(RE)")
 
     def check_all_completed(self) -> bool:
-        if not self.active:
+        """
+        시퀀스가 비활성 상태이고, 마지막으로 진행된 스텝의 모든 로봇이 
+        'DONE' 메시지를 보냈는지까지 확인하여 더 정확한 완료 여부를 반환합니다.
+        """
+        # 시퀀스가 실행 중이면 당연히 미완료
+        if self.active:
+            return False
+        
+        # 시퀀스가 비활성(active=False)이더라도, 마지막 스텝에 참여한 로봇들이
+        # 모두 done 처리가 되었는지 확인해야 진짜 완료입니다.
+        # step_inflight는 마지막으로 명령을 받은 로봇들의 집합입니다.
+        # step_done은 해당 스텝을 완료했다고 보고한 로봇들의 집합입니다.
+        if self.step_inflight and self.step_done >= self.step_inflight:
+            # 마지막 스텝의 모든 로봇이 완료했고, 시퀀스도 비활성이므로 진짜 완료
             return True
-        if self.current_step >= self.max_steps and not self.step_inflight:
+        elif not self.step_inflight:
+            # inflight가 비어있다는 것은 시퀀스가 시작되었지만 아무 로봇도 참여하지 않았거나,
+            # 모든 것이 초기화된 상태이므로 완료로 간주합니다.
             return True
+        
+        # 시퀀스는 비활성이지만 아직 step_done이 inflight를 만족시키지 못한
+        # 과도기적 상태일 수 있으므로, 미완료로 처리합니다.
         return False
-    
-    def set_vision_system_provider(self, fn):
-        """fn() -> VisionSystem 인스턴스"""
-        self._vision_system_provider = fn
-
-    def _get_current_step_goal_cell(self, rid: str) -> tuple[int,int] | None:
-        """이번 스텝에서 해당 로봇의 목표 (row,col) 반환"""
-        plan = self._step_cell_plan.get(self.current_step, {})
-        info = plan.get(rid)
-        if not info: 
-            return None
-        return info.get("dst")
-    
-    def go_to_step_goal(self, ids: list[str]) -> None:
-        """RE 직후, 이번 스텝의 원래 목표 셀로 '목표정렬'을 퍼블리시한다."""
-        vs = getattr(self, "_vision_system_provider", None)
-        if not vs:
-            print("[go_to_step_goal] vision system provider 미설정")
-            return
-
-        tag_info = self.tag_info_provider() if self.tag_info_provider else {}
-        goals = {}
-        for rid in ids:
-            rid = str(rid)
-            # --- 이 블록 유지 ---
-            if rid in self.step_done: 
-                continue
-            # --- 이 줄을 삭제 (미참가여도 허용) ---
-            # if rid not in self.step_inflight:
-            #     continue
-            dst = self._get_current_step_goal_cell(rid)
-            if dst:
-                goals[int(rid)] = dst
-
-        if not goals:
-            print("[go_to_step_goal] 이번 스텝 목표 없음 → 건너뜀")
-            return
-
-        from controller.align import send_goal_align
-        send_goal_align(self.client, tag_info, self.mqtt_topic_commands, vs(), goals, alignment_pending=None)
-
-        # 송신 후 집계 표식은 유지(안전)
-        for rid in goals.keys():
-            rid_s = str(rid)
-            self.inflight[rid_s] = True
-            self.step_inflight.add(rid_s)
-
-        print(f"🎯 [Step {self.current_step+1}/{self.max_steps}] 목표정렬 전송 → {sorted(goals.items())}")
-
-    def register_step_goals_for_current(self, goals: dict[int, tuple[int, int]]) -> None:
-        """
-        수동/GoalAlign로 스텝을 시작할 때, 이번 스텝의 각 로봇 목표 (row,col)를 기록.
-        해제 시 go_to_step_goal()이 이 값을 사용한다.
-        """
-        step = self.current_step
-        plan = self._step_cell_plan.setdefault(step, {})  # step -> rid -> dict
-        for rid, rc in goals.items():
-            rid_s = str(rid)
-            entry = plan.setdefault(rid_s, {})
-            entry["dst"] = (int(rc[0]), int(rc[1]))
-
     
     def _publish(self, rid: str, command_set: list[dict]) -> None:
         payload = json.dumps({
@@ -725,43 +815,83 @@ class RobotController:
             }]
         })
         self.client.publish(self.mqtt_topic_commands, payload)
-
-    def _normalize_delta_deg(self, d: float) -> float:
-        return ((float(d) + 180.0) % 360.0) - 180.0
-
-    def _desired_cardinal_for_current_step(self, rid: str | int) -> float | None:
+        
+    def is_executing(self, rid) -> bool | None:
         """
-        이번 스텝의 src->dst 그리드로 '봐야 할 정방향' 절대각을 반환.
-        프레임: E=0°, N=90°, W=180°, S=270° (align과 동일).
+        현재 step에서 해당 로봇이 '전송되어 완료 대기 중'이라면 True,
+        명령 대기 상태라면 False, 알 수 없으면 None.
         """
-        rid_s = str(rid)
+        try:
+            return self.inflight.get(str(rid), None)
+        except Exception:
+            return None
+
+    def set_alignment_completion_callback(self, cb):
+        self._align_cb = cb  # cb(robot_id: str)
+
+    def run_align_sequence(self, preset_ids, *, do_release=False):
+        if do_release: self._release(preset_ids)
+        time.sleep(self.alignment_delay_sec)             # 도착 직후 0.3s 정지
+        self.run_center_align(preset_ids, do_release=False)
+
+        def _one(rid):
+            rid = str(rid)
+            # (1) 센터 완료 대기
+            while True:
+                info = self.alignment_pending.get(rid)
+                if not info or info.get("mode") != "center": break
+                time.sleep(0.1)
+            if not self.check_center_alignment_ok(rid):
+                self.run_center_align([rid], do_release=False); return
+            time.sleep(self.alignment_delay_sec)      # 0.3s
+
+            # (2) 방향 정렬 시작
+            self.run_direction_align([rid], do_release=False)
+
+            # (3) 방향 완료 대기
+            while True:
+                info = self.alignment_pending.get(rid)
+                if not info or info.get("mode") != "direction": break
+                time.sleep(0.1)
+            if not self.check_direction_alignment_ok(rid):
+                self.run_direction_align([rid], do_release=False); return
+
+            time.sleep(self.alignment_delay_sec)      # 방향 끝난 뒤 0.3s
+
+            # (4) 전체 정렬 완료 신호 (다른 로봇 이동은 계속)
+            if hasattr(self, "_align_cb") and self._align_cb:
+                self._align_cb(rid)
+
+        for rid in preset_ids:
+            threading.Thread(target=_one, args=(rid,), daemon=True).start()
+
+    def aligned_recently(self, robot_id: str | int, within_sec: float = 0.3) -> bool:
+        ts = self._last_align_ok_ts.get(str(robot_id))
+        return (ts is not None) and ((time.time() - ts) <= within_sec)
+
+    def request_pause_on_step_boundary(self):
+        self.defer_pause_all = True
+        
+    def get_current_step_info(self) -> dict:
+        """
+        [시각화용] 현재 스텝에서 활성화된 로봇들의 목표(dst)와 명령(cmd)을 반환.
+        시퀀스가 비활성이면 빈 dict를 반환.
+        """
+        if not self.active:
+            return {}
+
+        info = {}
+        participants = [
+            rid for rid, cmds in self.robot_command_map.items()
+            if self.current_step < len(cmds)
+        ]
+
         plan = self._step_cell_plan.get(self.current_step, {})
-        info = plan.get(rid_s)
-        if not info: 
-            return None
-        src = info.get("src"); dst = info.get("dst")
-        if not (src and dst):
-            return None
 
-        r0, c0 = int(src[0]), int(src[1])
-        r1, c1 = int(dst[0]), int(dst[1])
-        dr, dc = (r1 - r0), (c1 - c0)
-
-        if dr == 0 and dc > 0:   # →
-            return 0.0          # E
-        if dr == 0 and dc < 0:   # ←
-            return 180.0        # W
-        if dc == 0 and dr < 0:   # ↑ (row 감소 = 북)
-            return 90.0         # N
-        if dc == 0 and dr > 0:   # ↓ (row 증가 = 남)
-            return 270.0        # S
-
-        # 대각선이라면 가장 가까운 축으로 스냅
-        import math
-        ang = (math.degrees(math.atan2(-dr, dc)) + 360.0) % 360.0  # E=0,N=90
-        for base in (0.0, 90.0, 180.0, 270.0):
-            if abs(self._normalize_delta_deg(ang - base)) <= 45.0:
-                return base
-        return 0.0  # fallback=E
-
-    
+        for rid in participants:
+            if rid not in self.paused_robots:
+                dst = plan.get(rid, {}).get("dst")
+                cmd = self.robot_command_map[rid][self.current_step]
+                if dst:
+                    info[rid] = {"dst": dst, "cmd": cmd}
+        return info

@@ -1,10 +1,10 @@
 # simulator.py
 import cv2
 import numpy as np
-from simulator.fake_mqtt import FakeMQTTBroker
+from OpenCV.code.simulator.fake_mqtt import FakeMQTTBroker
 
 class Simulator:
-    def __init__(self, map_array, colors, cell_size=50):
+    def __init__(self, map_array, colors, cell_size=50,home_positions=None):
         self.map_array = map_array
         self.colors = colors
         self.cell_size = cell_size
@@ -15,6 +15,7 @@ class Simulator:
         self.robot_past_paths = {}
         self.random_mode_enabled = False
         self.arrival_callback = None
+        self.home_positions = home_positions if home_positions is not None else {}
 
     # 로봇 추가
     def add_robot(self, robot_id, broker, start_pos=(0, 0), direction="north"):
@@ -26,7 +27,24 @@ class Simulator:
         print(f"Simulator: 로봇 {robot_id} 추가 완료. 시작 위치: {start_pos}")
         self.robot_info[robot_id] = {'path': None, 'goal': None, 'start': start_pos}
         return robot
-
+    
+    # ✅ 2. 홈 위치를 그리는 함수 새로 추가
+    def draw_home_positions(self, vis):
+        """홈 위치를 연한 회색으로 그립니다."""
+        if not self.home_positions:
+            return
+            
+        color = (220, 220, 220) # 연한 회색
+        overlay = vis.copy()
+        
+        for pos in self.home_positions.values():
+            r, c = pos
+            x, y = c * self.cell_size, r * self.cell_size
+            cv2.rectangle(overlay, (x, y), (x + self.cell_size, y + self.cell_size), color, -1)
+            
+        # 반투명 효과를 적용하여 vis에 합칩니다.
+        cv2.addWeighted(overlay, 0.7, vis, 0.3, 0, vis)
+        
     # 맵 그리기
     def create_grid(self):
         rows, cols = self.map_array.shape
@@ -133,6 +151,7 @@ class Simulator:
         
         # self.draw_paths(self.vis)          # 경로 먼저 그리기
         # self.draw_start_goal(self.vis)      # 출발지, 도착지 그리기
+        self.draw_home_positions(self.vis)
         self.draw_robots(self.vis)                  # 로봇(보간 이동) 그리기
         
         if not self.paused:
@@ -226,7 +245,7 @@ class Robot:
             print(f"[Robot {self.robot_id}] 이동 중 → 기존 명령 유지, queue 덮어쓰기")
             self.command_queue = command_list  # ✅ 리스트 그대로 받음
         else:
-            print(f"[Robot {self.robot_id}] 정지 상태 → 명령 즉시 실행")
+            #print(f"[Robot {self.robot_id}] 정지 상태 → 명령 즉시 실행")
             self.current_command = command_list.pop(0) if command_list else None
             self.command_queue = command_list
 

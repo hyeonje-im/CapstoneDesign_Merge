@@ -171,7 +171,7 @@ class BoardDetector:
         # 탐색 파라미터
         self.enable_contour_fallback = True
         self.debug_draw = True
-        self.min_len_ratio = 0.05
+        self.min_len_ratio = 0.15
         self.max_gap_ratio = 0.05
         self.ortho_tol_deg = 30.0
 
@@ -179,6 +179,11 @@ class BoardDetector:
         self.roi_filter = self.BoardROIFilter()
         self._result = None
         self._locked = False
+
+        try:
+            self._lsd = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
+        except Exception:
+            self._lsd = None
     # ---------- 내부 유틸 ----------
     @staticmethod
     def _right_angle_score(pts4):
@@ -258,8 +263,8 @@ class BoardDetector:
     def _detect_lines(self, edges, min_len, max_gap):
         segs = []
         try:
-            lsd = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
-            lines, _, _, _ = lsd.detect(edges)
+            lsd = getattr(self, "_lsd", None)
+            lines, _, _, _ = (lsd.detect(edges) if lsd is not None else (None, None, None, None))
             if lines is not None:
                 for l in lines.reshape(-1,4):
                     x1,y1,x2,y2 = map(float, l)
@@ -464,21 +469,21 @@ class BoardDetector:
 
     def process(self, frame_gray, detect_params, roi_offset=None, rect_override=None) -> BoardDetectionResult | None:
         if self._locked and self._result is not None:
-            H = self._result.perspective_matrix
-            w_px = int(self._result.width_px)
-            h_px = int(self._result.height_px)
-            warped = cv2.warpPerspective(frame_gray, H, (w_px, h_px))
-            warped_resized = cv2.resize(warped, (frame_gray.shape[1]//2, frame_gray.shape[1]//2))
-            self._result.warped = warped
-            self._result.warped_resized = warped_resized
+            # H = self._result.perspective_matrix
+            # w_px = int(self._result.width_px)
+            # h_px = int(self._result.height_px)
+            # warped = cv2.warpPerspective(frame_gray, H, (w_px, h_px))
+            # warped_resized = cv2.resize(warped, (frame_gray.shape[1]//2, frame_gray.shape[1]//2))
+            # self._result.warped = warped
+            # self._result.warped_resized = warped_resized
             return self._result
         
-        tape_mask = self._tape_mask(frame_gray)
-        self.roi_filter.autotune_params(frame_gray)
-        ap = dict(self.roi_filter.auto_params)
-        bin_img = self.roi_filter.binarize_with(frame_gray, ap)
+        tape_mask = self._tape_mask(frame_gray)  
+        # self.roi_filter.autotune_params(frame_gray)
+        # ap = dict(self.roi_filter.auto_params)
+        # bin_img = self.roi_filter.binarize_with(frame_gray, ap)
 
-        rect = rect_override if rect_override is not None else self.detect(bin_img, detect_params, tape_mask=tape_mask)
+        rect = rect_override if rect_override is not None else self.detect(frame_gray, detect_params, tape_mask=tape_mask)
         if rect is None:
             return self._result  # 기존 있으면 유지, 없으면 None
         rect_input = rect  # ROI 좌표
@@ -574,7 +579,7 @@ class BoardDetector:
         
         dbg_canvas = cv2.cvtColor(bin_img, cv2.COLOR_GRAY2BGR)
         if tape_mask is not None:
-            src_bin = cv2.bitwise_and(bin_img, tape_mask)
+            src_bin = cv2.bitwise_and(bin_img, bin_img, mask=tape_mask)
         else:
             src_bin = bin_img.copy()
         
@@ -683,7 +688,7 @@ class BoardDetector:
        
         if self.debug_draw:
             self._draw_overlay_once(dbg_canvas, overlay)
-
+            cv2.imshow("Board Debug", dbg_canvas)
         return ordered.reshape(4,1,2).astype(np.float32)
 
     def generate_coordinate_system(self):
