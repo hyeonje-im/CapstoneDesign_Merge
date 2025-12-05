@@ -1,300 +1,66 @@
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.button import Button
-from kivy.uix.label import Label
+from kivy.uix.gridlayout import GridLayout
+from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
-from kivy.clock import Clock
-from kivy.graphics import Color, RoundedRectangle
-from OpenCV.code.ui_bridge import FrameBus
-from Main_pages2.Main2_grid import GridWidget
-from Utilities.UI_utilities import KToggleRoundedButton
 
 
-# ====================================================
-# 1) 개별 행 위젯: Num | Pos | Goal | Status
-# ====================================================
-class OrderRowWidget(BoxLayout):
-    def __init__(self, num="#12", pos="[3,1]", goal="[3,4]", status="MOVING",
-                 order_enabled=False, order_callback=None, **kwargs):
-        super().__init__(orientation="horizontal", size_hint_y=None, height=dp(36), spacing=10, **kwargs)
-
-        # Num
-        self.add_widget(Label(text=num, size_hint_x=0.15,
-                              halign="left", valign="middle", color=(0,0,0,1)))
-
-        # Position
-        self.add_widget(Label(text=pos, size_hint_x=0.2,
-                              halign="left", valign="middle", color=(0,0,0,1)))
-
-        # Goal
-        self.add_widget(Label(text=goal, size_hint_x=0.2,
-                              halign="left", valign="middle", color=(0,0,0,1)))
-
-        # Status 버튼
-        st = Button(
-            text=status,
-            size_hint_x=0.25,
-            background_color=self._status_color(status),
-            background_normal="",
-            color=(0,0,0,1),
-            disabled=True
-        )
-        self.add_widget(st)
-
-        # ORDER 버튼
-        self.order_btn = Button(
-            text="ORDER",
-            size_hint_x=0.18,
-            background_color=(0.3, 0.9, 0.4, 1),
-            background_normal="",
-            color=(0,0,0,1),
-            disabled=not order_enabled
-        )
-
-        if order_callback:
-            self.order_btn.bind(on_release=lambda *_: order_callback())
-
-        self.add_widget(self.order_btn)
-
-
-    # ----------------------------------------------
-    # 상태별 색상
-    # ----------------------------------------------
-    def _status_color(self, status):
-        STATUS_COLOR = {
-            "IDLE": (0.85, 0.85, 0.85, 1),
-            "MOVING": (0.4, 0.7, 1, 1),
-            "ARRIVED": (0.6, 1, 0.6, 1),
-            "WAITING": (1, 0.6, 0.3, 1),
-            "REPLANNING": (1, 0.85, 0.4, 1),
-            "ALIGNING": (0.3, 1, 0.7, 1),
-            "RETURNING": (0.6, 0.4, 1, 1),
-            "AT_HOME": (0.9, 0.9, 1, 1),
-        }
-        return STATUS_COLOR.get(status, (0.9, 0.9, 0.9, 1))
-
-
-# ====================================================
-# 2) ID별 컬럼 (ID1 / ID2 / ID3)
-# ====================================================
-class IDColumnWidget(BoxLayout):
-    def __init__(self, title="ID1", side="middle", **kwargs):
+class ScenarioOrderList(BoxLayout):
+    def __init__(self, **kwargs):
         super().__init__(orientation="vertical", spacing=10, padding=10, **kwargs)
-        
-        # === 라운딩 설정 ===
-        if side == "left":
-            radius = [dp(10), 0, 0, dp(10)]
-        elif side == "right":
-            radius = [0, dp(10), dp(10), 0]
-        else:
-            radius = [0, 0, 0, 0]
 
-        # === 배경 ===
+        # ============================
+        # 배경
+        # ============================
         with self.canvas.before:
-            Color(0.96, 0.97, 0.99, 1)
-            self.bg = RoundedRectangle(radius=radius, pos=self.pos, size=self.size)
-        self.bind(pos=self.update_bg, size=self.update_bg)
+            Color(0.96, 0.97, 0.99, 1)  # 연한 배경
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # --- Title ---
-        title_label = Label(
-            text=title, size_hint_y=None, height=dp(30),
-            bold=True, color=(0,0,0,1),
-            halign="left", valign="middle",
-        )
-        title_label.bind(size=lambda inst, val: setattr(inst, 'text_size', val))
-        self.add_widget(title_label)
+        # ============================
+        # 제목(옵션: 필요 없으면 삭제)
+        # ============================
+        # 여기는 나중에 제목을 넣을 수 있음
+        # 현재는 아무 위젯도 넣지 않음
 
-        # --- Header ---
-        header = GridLayout(cols=5, size_hint_y=None, height=dp(30))
-        header.add_widget(Label(text="Num", bold=True, color=(0,0,0,1)))
-        header.add_widget(Label(text="Pos", bold=True, color=(0,0,0,1)))
-        header.add_widget(Label(text="Goal", bold=True, color=(0,0,0,1)))
-        header.add_widget(Label(text="Status", bold=True, color=(0,0,0,1)))
-        header.add_widget(Label(text="Order", bold=True, color=(0,0,0,1))) 
-        self.add_widget(header)
-
-        # --- 리스트 영역 ---
+        # ============================
+        # 스크롤 영역
+        # ============================
         self.scroll = ScrollView(size_hint=(1, 1))
-        self.list_layout = GridLayout(cols=1, size_hint_y=None, spacing=5)
+
+        # 리스트 영역 (추후 Row가 들어올 공간)
+        self.list_layout = GridLayout(
+            cols=1,
+            spacing=10,
+            size_hint_y=None
+        )
         self.list_layout.bind(minimum_height=self.list_layout.setter("height"))
 
         self.scroll.add_widget(self.list_layout)
         self.add_widget(self.scroll)
 
-    def update_bg(self, *_):
+    # ============================
+    # 배경 업데이트
+    # ============================
+    def _update_bg(self, *args):
         self.bg.pos = self.pos
         self.bg.size = self.size
 
-
-# ====================================================
-# 3) 전체 ORDER LIST 화면
-# ====================================================
-class ScenarioOrderList(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(orientation="vertical", spacing=10, padding=10, **kwargs)
-
-        # -----------------------
-        # 탭
-        # -----------------------
-        tab_bar = BoxLayout(size_hint_y=None, height=dp(40), spacing=10)
-
-        self.tab_order = KToggleRoundedButton(
-            text="ORDER LIST",
-            group="scenario_tabs", radius=10,
-            font_size=20
-        )
-        self.tab_grid = KToggleRoundedButton(
-            text="GRID VIEW",
-            group="scenario_tabs", radius=10,
-            font_size=20
-        )
-
-        self.tab_order.bind(on_release=lambda *_: self.show_order_view())
-        self.tab_grid.bind(on_release=lambda *_: self.show_grid_view())
-
-        tab_bar.add_widget(self.tab_order)
-        tab_bar.add_widget(self.tab_grid)
-        self.add_widget(tab_bar)
-
-        # -----------------------
-        # 메인 영역
-        # -----------------------
-        self.main_area = BoxLayout()
-        self.add_widget(self.main_area)
-
-        # 화면 구성
-        self.order_screen = self._build_order_screen()
-        self.grid_screen = self._build_grid_screen()
-
-        # 컬럼 저장용
-        self.col_widgets = {}
-
-        # UI 시작 화면
-        self.show_order_view()
-
-        # FrameBus 실시간 업데이트
-        Clock.schedule_interval(self.update_from_framebus, 0.1)
-
-
-    # ====================================================
-    # ORDER LIST 화면
-    # ====================================================
-    def _build_order_screen(self):
-        layout = BoxLayout(orientation="vertical", spacing=10)
-
-        with layout.canvas.before:
-            Color(0.96, 0.97, 0.99, 1)
-            self.order_bg = RoundedRectangle(pos=layout.pos, size=layout.size)
-        layout.bind(pos=lambda *_: self._update_order_bg(layout),
-                    size=lambda *_: self._update_order_bg(layout))
-
-        row = BoxLayout(orientation="horizontal", spacing=0)
-
-        col1 = IDColumnWidget("ID1", side="left")
-        col2 = IDColumnWidget("ID2", side="middle")
-        col3 = IDColumnWidget("ID3", side="right")
-
-        self.col_widgets = {1: col1, 2: col2, 3: col3}
-
-        row.add_widget(col1)
-        row.add_widget(col2)
-        row.add_widget(col3)
-
-        layout.add_widget(row)
-        return layout
-
-    def _update_order_bg(self, layout):
-        self.order_bg.pos = layout.pos
-        self.order_bg.size = layout.size
-
-    # ====================================================
-    # GRID 화면
-    # ====================================================
-    def _build_grid_screen(self):
-        layout = BoxLayout()
-
-        with layout.canvas.before:
-            Color(1,1,1,1)
-            self.bg = RoundedRectangle(radius=[dp(10)], pos=layout.pos, size=layout.size)
-        layout.bind(pos=lambda *_: self._update_bg(layout),
-                    size=lambda *_: self._update_bg(layout))
-
-        layout.add_widget(Label(text="Grid Map Placeholder",
-                                color=(0,0,0,1)))
-        return layout
-
-    # ====================================================
-    # FrameBus → UI 연동
-    # ====================================================
+    # ============================
+    # 백엔드 연동 (지금은 비어 있음)
+    # ============================
     def update_from_framebus(self, dt):
-        ui_state = FrameBus.get_robot_ui_state()
-        order_state = FrameBus.get_scenario_order_state()
+        """
+        나중에 FrameBus 데이터 넣어 리스트 갱신하는 코드를 여기 작성하면 됨.
+        지금은 완전 빈 상태로 둠.
+        """
+        pass
 
-        if not ui_state:
-            return
-
-        # --- ID1 / ID2 / ID3 ---
-        for rid, col in self.col_widgets.items():
-            col.list_layout.clear_widgets()
-
-            robot = ui_state.get(rid)
-            orders = order_state.get(rid) if order_state else None
-
-            # -------------------------
-            # 1) 로봇 기본 상태 1줄 표시 + ORDER 버튼
-            # -------------------------
-            if robot:
-                num = str(robot.get("num", "-"))
-                pos = str(robot.get("pos", "-"))
-                goal = str(robot.get("goal", "-"))
-                status = robot.get("status", "IDLE")
-                ready = robot.get("ready_for_order", False)
-
-                # 버튼 클릭 시 on_number_key 호출
-                def make_callback(rid=rid):
-                    from OpenCV.code.ui_bridge import post
-                    post("scenario.number_key", {"rid": rid})
-
-                row = OrderRowWidget(
-                    num=num,
-                    pos=pos,
-                    goal=goal,
-                    status=status,
-                    order_enabled=ready,
-                    order_callback=make_callback
-                )
-                col.list_layout.add_widget(row)
-
-            # -------------------------
-            # 2) RestaurantMode 주문 목록 표시
-            # -------------------------
-            if orders:
-                for od in orders:
-                    od_num   = f"Order {od.get('order_id', '-')}"
-                    od_pos   = str(od.get("start", "-"))
-                    od_goal  = str(od.get("goal", "-"))
-                    od_stat  = od.get("status", "-")
-
-                    od_row = OrderRowWidget(
-                        num=od_num, pos=od_pos, goal=od_goal, status=od_stat,
-                        order_enabled=False,     # 주문 리스트에는 버튼 없음
-                        order_callback=None
-                    )
-                    col.list_layout.add_widget(od_row)
-
-
-    # -----------------------
-    # 화면 전환
-    # -----------------------
-    def show_order_view(self):
-        self.main_area.clear_widgets()
-        self.main_area.add_widget(self.order_screen)
-
-    def show_grid_view(self):
-        self.main_area.clear_widgets()
-        self.main_area.add_widget(self.grid_screen)
-
-    def _update_bg(self, instance):
-        self.bg.pos = instance.pos
-        self.bg.size = instance.size
+    # ============================
+    # Row 추가 (샘플 함수)
+    # ============================
+    def add_row(self, widget):
+        """
+        나중에 원하는 Row 위젯을 만들어 이 함수로 넣으면 됨.
+        """
+        self.list_layout.add_widget(widget)

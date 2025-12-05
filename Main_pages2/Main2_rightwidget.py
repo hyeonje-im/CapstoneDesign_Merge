@@ -18,7 +18,6 @@ from kivy.uix.label import Label
 
 
 class VideoFeed(Image):
-    """FrameBus에서 BGR 프레임을 읽어 Texture로 그리는 Kivy 위젯."""
     def __init__(self, fps=30, **kwargs):
         super().__init__(allow_stretch=True, keep_ratio=True, **kwargs)
         self._interval = 1.0 / max(1, fps)
@@ -37,30 +36,24 @@ class VideoFeed(Image):
 
 
 class WarpedFeed(RelativeLayout):
-    """FrameBus에서 왜곡 보정된 BGR 프레임을 읽어 Texture로 그리는 Kivy 위젯.
-       - 워프보드가 없으면 배경색과 안내 문구 표시
-       - 워프보드가 있으면 영상 표시
-    """
     def __init__(self, fps=30, **kwargs):
         super().__init__(**kwargs)
 
-        # 내부에 Image 위젯 배치 (실제 영상 표시용)
         self.img = Image(allow_stretch=True, keep_ratio=True, size_hint=(1, 1))
         self.add_widget(self.img)
 
         # 중앙 안내 라벨
         self.label = Label(
             text="Warped Board is not detected",
-            color=(1, 1, 1, 1),   # 흰색
+            color=(0,0,0,1), 
             font_size=18,
             halign="center",
             valign="middle"
         )
         self.add_widget(self.label)
 
-        # UI 배경색 (#2E3349)
         with self.canvas.before:
-            Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
+            Color(0xF5 / 255, 0xF7 / 255, 0xFC / 255, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._update_bg, size=self._update_bg)
 
@@ -75,12 +68,11 @@ class WarpedFeed(RelativeLayout):
     def _tick(self, dt):
         frame_bgr = FrameBus.get_warped()
         if frame_bgr is None:
-            # 워프보드 감지 안됨 → 안내 문구 보이기
             self.label.opacity = 1
             self.img.opacity = 0
             return
 
-        # 워프보드 감지됨 → 영상 표시
+        
         self.label.opacity = 0
         self.img.opacity = 1
 
@@ -98,9 +90,9 @@ class RightWidget(BoxLayout):
         super().__init__(orientation='vertical', size_hint_x=0.5, **kwargs)
 
         with self.canvas.before:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.border = KLine(self)
-            Color(0x2E / 255, 0x33 / 255, 0x49 / 255, 1)
+            Color(0xF5 / 255, 0xF7 / 255, 0xFC / 255, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self.update_bg_and_border, size=self.update_bg_and_border)
 
@@ -125,12 +117,10 @@ class RightWidget(BoxLayout):
         # 워프보드 영상
         self.warped_feed = WarpedFeed(fps=30, size_hint=(1, 1))
 
-    
-        # 두 위젯 겹쳐서 놓기
         self.video_layer.add_widget(self.video_feed)
         self.video_layer.add_widget(self.warped_feed)
 
-        #초기에 원본 영상 보이도록 설정
+        #초기 원본 영상 표시
         self.video_feed.opacity = 1
         self.warped_feed.opacity = 0
 

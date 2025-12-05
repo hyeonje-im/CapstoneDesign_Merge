@@ -12,7 +12,7 @@ import csv
 from datetime import datetime
 # UI 연동 관련
 
-SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "1")))
+SHOW_CV_WINDOWS = bool(int(os.environ.get("SHOW_CV_WINDOWS", "")))
 
 _KEYQ: "Queue[int]" = Queue()
 
@@ -47,7 +47,7 @@ from OpenCV.code.recieve_message import set_tag_info_provider
 from OpenCV.code.scenario.ScenarioManager import ScenarioManager
 from OpenCV.code.scenario.TestMode import TestMode
 from OpenCV.code.scenario.RandomMode import RandomMode
-from OpenCV.code.scenario.RestaurantMode import RestaurantMode  
+from OpenCV.code.scenario.RestaurantMode import RestaurantMode
 from OpenCV.code.ui_bridge import FrameBus, get_cmd_nowait
 
 SELECTED_RIDS = set()
@@ -165,11 +165,11 @@ def correction_trackbar_callback(val):
     correction_coef_value = val / 100.0
     print(f"[INFO] 실시간 보정계수: {correction_coef_value:.2f}")
 
-cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
-cv2.createTrackbar(
-    "Correction Coef", "CorrectionPanel",
-    int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
-)
+# cv2.namedWindow("CorrectionPanel", cv2.WINDOW_NORMAL)
+# cv2.createTrackbar(
+#     "Correction Coef", "CorrectionPanel",
+#     int(CORRECTION_COEF * 100), 200, correction_trackbar_callback
+# )
 
 def get_tag_info_safe():  # ◀◀◀ [추가 시작]
     """
@@ -324,7 +324,7 @@ def show_orders_text_panel(ui_state: dict):
             if shown >= 14:  # 너무 많으면 컷
                 break
 
-    cv2.imshow("Orders", img)
+    
     FrameBus.set_orders(img)
 
 
@@ -702,9 +702,9 @@ def main():
     #=========================================
     
     if SHOW_CV_WINDOWS:
-        cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback("Video_display", vision.mouse_callback)
-        cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
+        # cv2.namedWindow("Video_display", cv2.WINDOW_NORMAL)
+        # cv2.setMouseCallback("Video_display", vision.mouse_callback)
+        # cv2.namedWindow("CBS Grid", cv2.WINDOW_NORMAL)
         cv2.setMouseCallback("CBS Grid", unified_mouse)  # ← 수동 모드 대응
         controller.set_board_info_provider(lambda: vision.board_result) # <<< [추가]
 
@@ -788,6 +788,9 @@ def main():
                 path_list.append((a.id, p))
         FrameBus.set_paths(path_list)
 
+        cands = getattr(scenario.mode, "candidate_goals", None)
+        if cands is not None:
+            FrameBus.set_candidate_goals(list(cands))
 
         # UI 명령 처리 (버튼 클릭, 키 입력 등)
         # =============================
@@ -961,8 +964,8 @@ def main():
         if ui_state:
             FrameBus.set_robot_ui_state(ui_state)
              
-        cv2.imshow("CBS Grid", vis)
-        cv2.imshow("Video_display", frame)
+        # cv2.imshow("CBS Grid", vis)
+        # cv2.imshow("Video_display", frame)
 
         key = cv2.waitKey(1)
         if key == ord('q'):

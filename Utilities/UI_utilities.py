@@ -7,16 +7,16 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 
 
-# 한글 폰트 적용된 Kivy Label
+
 def KLabel(text, **kwargs):
     font_path = "assets/fonts/Pretendard-Regular.otf"
     return Label(text=text, font_name=font_path, **kwargs)
 
-# 테두리 선 그리기 함수
+
 def KLine(widget, **kwargs):
     return Line(rectangle=(widget.x, widget.y, widget.width, widget.height), width=1, **kwargs)
 
-# 어두운 셀 생성 함수
+
 def make_darkcell(text, **kwargs):
     box = BoxLayout(
     size_hint_y  = None,
@@ -24,12 +24,12 @@ def make_darkcell(text, **kwargs):
     
     #배경 색상
     with box.canvas.before:
-        Color(0x25/255, 0x28/255, 0x3B/255, 1)  # 25283B
+        Color(0xCC/255, 0xD6/255, 0xE5/255, 1) 
         box.bg = Rectangle(pos=box.pos, size=box.size)
 
     #테두리 선
     with box.canvas.after:
-        Color(0, 0, 0, 1)
+        Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
         box.border = Line(rectangle = (box.x, box.y, box.width, box.height), width=1)
     
     def update_graphics(*args):
@@ -39,11 +39,10 @@ def make_darkcell(text, **kwargs):
 
     box.bind(pos=update_graphics, size=update_graphics)
     
-    #텍스트 추가
-    box.add_widget(KLabel(text=text, font_size=13, color=(1,1,1,1)))
+    box.add_widget(KLabel(text=text, font_size=13, color=(0,0,0,1)))
     return box
 
-# 밝은 셀 생성 함수
+# 밝은 셀
 def make_brightcell(text, **kwargs):
     box = BoxLayout(
     size_hint_y  = None,
@@ -51,12 +50,12 @@ def make_brightcell(text, **kwargs):
     
     #배경 색상
     with box.canvas.before:
-        Color(0x2E/255, 0x33/255, 0x49/255, 1) # 2E3349
+        Color(0xF5/255, 0xF7/255, 0xFC/255, 1)
         box.bg = Rectangle(pos=box.pos, size=box.size)
 
     #테두리 선
     with box.canvas.after:
-        Color(0, 0, 0, 1)
+        Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
         box.border = Line(rectangle = (box.x, box.y, box.width, box.height), width=1)
     
     def update_graphics(*args):
@@ -66,8 +65,7 @@ def make_brightcell(text, **kwargs):
 
     box.bind(pos=update_graphics, size=update_graphics)
     
-    #텍스트 추가
-    box.add_widget(KLabel(text=text, font_size=13, color=(1,1,1,1)))
+    box.add_widget(KLabel(text=text, font_size=13, color=(0,0,0,1)))
     return box
 
 class KButton(ButtonBehavior, BoxLayout):
@@ -79,21 +77,21 @@ class KButton(ButtonBehavior, BoxLayout):
         self.text = text
 
         # 색상 정의
-        self.normal_color = (0xAB/255, 0xAB/255, 0xAB/255, 1)  # 밝은 셀
-        self.down_color   = (0xAB/255, 0xAB/255, 0xAB/255, 1)  # 어두운 셀
+        self.normal_color = (0xCC/255, 0xD6/255, 0xE5/255, 1)  # 밝은 셀
+        self.down_color   = (0xCC/255, 0xD6/255, 0xE5/255, 1)  # 어두운 셀
 
-        # 배경 + 테두리
+        # 배경 테두리
         with self.canvas.before:
             Color(*self.normal_color)
             self.bg = Rectangle(pos=self.pos, size=self.size)
         with self.canvas.after:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.border = Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
 
         self.bind(pos=self._update_graphics, size=self._update_graphics)
 
         # 내부 텍스트
-        self.label = KLabel(text=text, font_size=13, color=(1, 1, 1, 1))
+        self.label = KLabel(text=text, font_size=13, color=(0,0,0,1))
         self.add_widget(self.label)
 
     def _update_graphics(self, *args):
@@ -123,25 +121,25 @@ class KRoundedButton(ButtonBehavior, BoxLayout):
         self.text = text
 
         # 색상 정의
-        self.normal_color = (0x2E/255, 0x33/255, 0x49/255, 1)
-        self.down_color   = (0x25/255, 0x28/255, 0x3B/255, 1)
+        self.normal_color = (0xCC/255, 0xD6/255, 0xE5/255, 1)
+        self.down_color   = (0xCC/255, 0xD6/255, 0xE5/255, 1)
 
         # 라운딩 반경
         self.radius = [5, 5, 5, 5]
 
-        # 배경 + 테두리
+        # 배경 테두리
         with self.canvas.before:
             Color(*self.normal_color)
             self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
 
         with self.canvas.after:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.border = Line(rounded_rectangle=(self.x, self.y, self.width, self.height, *self.radius), width=1)
 
         self.bind(pos=self._update_graphics, size=self._update_graphics)
 
         # 내부 텍스트
-        self.label = KLabel(text=text, font_size=13, color=(1, 1, 1, 1))
+        self.label = KLabel(text=text, font_size=13, color=(0,0,0,1))
         self.add_widget(self.label)
 
     def _update_graphics(self, *args):
@@ -174,16 +172,19 @@ class KToggleRoundedButton(ButtonBehavior, BoxLayout):
         self.radius = [radius, radius, radius, radius]
 
         # 기본/눌림 색상
-        self.normal_color = (0.80, 0.84, 0.90, 1)   # #CCD6E5
-        self.down_color   = (0.65, 0.73, 0.85, 1)   # 더 진한 강조색
+        self.normal_color = (0.80, 0.84, 0.90, 1)   
+        self.down_color   = (0.65, 0.73, 0.85, 1)  
 
-        # 상태: normal 또는 down
+        
         self.state = "normal"
 
-        # 배경(라운딩)
+        # 배경/테두리
         with self.canvas.before:
             Color(*self.normal_color)
-            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=self.radius)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+        with self.canvas.after:
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
+            self.border = Line(rectangle=(self.x, self.y, self.width, self.height), width=1)
 
         self.bind(pos=self._update_graphics, size=self._update_graphics)
 
@@ -201,7 +202,6 @@ class KToggleRoundedButton(ButtonBehavior, BoxLayout):
         self.bg.size = self.size
 
     def on_press(self):
-        # 그룹의 다른 버튼들 normal 로 전환
         for btn in KToggleRoundedButton._groups[self.group]:
             if btn is not self:
                 btn.set_state("normal")

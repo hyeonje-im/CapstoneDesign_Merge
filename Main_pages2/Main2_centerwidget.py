@@ -4,7 +4,6 @@ from kivy.uix.gridlayout import GridLayout
 from kivy.graphics import Color, Rectangle
 from kivy.clock import Clock
 from kivy.uix.anchorlayout import AnchorLayout
-
 from Utilities.UI_utilities import KLine, KButton, KLabel
 from OpenCV.code.ui_bridge import FrameBus, post
 from Main_pages2.Main2_grid import GridWidget   
@@ -13,18 +12,18 @@ class GroupBox(BoxLayout):
     def __init__(self, title="", mode="row", **kwargs):
         super().__init__(orientation="vertical", padding=0, spacing=0, **kwargs)
 
-        # 전체 배경
+        #전체 배경
         with self.canvas.before:
-            Color(0x25/255, 0x28/255, 0x3B/255, 1)
+            Color(0xF5/255, 0xF7/255, 0xFC/255, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
 
         with self.canvas.after:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.border = KLine(self)
 
         self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # ================= 1) 타이틀 영역 =================
+        #타이틀 영역
         self.title_area = AnchorLayout(
             size_hint_y=0.2,
             anchor_x="center",
@@ -34,7 +33,7 @@ class GroupBox(BoxLayout):
         title_label = KLabel(
             text=title,
             font_size=15,
-            color=(1,1,1,1),
+            color=(0,0,0,1),
             size_hint=(1,1),
             halign="center",
             valign="middle",
@@ -42,15 +41,15 @@ class GroupBox(BoxLayout):
         self.title_area.add_widget(title_label)
         self.add_widget(self.title_area)
 
-        # ===== 구분선 =====
+        #구분선
         self.separator = BoxLayout(size_hint_y=None, height=1)
         with self.separator.canvas:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.sep_line = Rectangle(pos=self.separator.pos, size=self.separator.size)
         self.separator.bind(pos=self._update_sep, size=self._update_sep)
         self.add_widget(self.separator)
 
-        # ================= 2) 버튼 영역 =================
+        #버튼 영역
         self.button_area = BoxLayout(
             size_hint_y=0.8,
             padding=10,
@@ -58,7 +57,7 @@ class GroupBox(BoxLayout):
         )
         self.add_widget(self.button_area)
 
-        # 버튼 레이아웃 선택
+        #버튼 레이아웃
         if mode == "row":
             self.button_layout = BoxLayout(
                 orientation="horizontal",
@@ -89,7 +88,7 @@ class GroupBox(BoxLayout):
         self.sep_line.pos = self.separator.pos
         self.sep_line.size = self.separator.size
 
-# =================== CenterWidget ===================
+#CenterWidget
 class SingleControl(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation="vertical", size_hint_x=0.45, **kwargs)
@@ -97,35 +96,35 @@ class SingleControl(BoxLayout):
         self.selected_robot_id = None
         self.current_scenario_mode = "test"
 
-        # ===== 배경 =====
+        #배경
         with self.canvas.before:
-            Color(0x2E/255, 0x33/255, 0x49/255, 1)
+            Color(0xFC/255, 0xFC/255, 0xFC/255, 1)
             self.bg = Rectangle(pos=self.pos, size=self.size)
 
         with self.canvas.after:
-            Color(0, 0, 0, 1)
+            Color(0xAB/255, 0xAB/255, 0xAB/255, 1)
             self.border = KLine(self)
 
         self.bind(pos=self._update_bg, size=self._update_bg)
 
-        # ===== 상단 (GridView 영역) =====
+        #상단 GridView 영역
         upper = BoxLayout(size_hint_y=0.6)
         grid_holder = AnchorLayout(anchor_x='center', anchor_y='center')
 
-        # OpenCV 이미지 대신 Kivy Widget으로 변경
+        #Kivy Widget
         self.grid_view = GridWidget(grid_json_path = "OpenCV/grid/0926grid.json",
                                     size_hint=(0.95, 0.95))
         grid_holder.add_widget(self.grid_view)
 
         upper.add_widget(grid_holder)
 
-        # ===== 하단 버튼 =====
+        #하단 버튼
         lower = BoxLayout(orientation="vertical", spacing=5, size_hint_y=0.4)
 
         row1 = BoxLayout(orientation="horizontal", spacing=5)
         row2 = BoxLayout(orientation="horizontal", spacing=5)
         
-        # 로봇 선택
+        #로봇 선택
         robot_group = GroupBox(title="로봇 선택", mode = "row")
         for i in range(1, 5):
             btn = KButton(text=f"D{i}", size_hint = (1,1))
@@ -133,7 +132,7 @@ class SingleControl(BoxLayout):
             robot_group.button_layout.add_widget(btn)
         row1.add_widget(robot_group)
 
-        # 정렬
+        #정렬
         align_group = GroupBox(title="정렬", mode = "row")
         for text, cmd in [
             ("중앙 정렬", "center_align"),
@@ -144,7 +143,7 @@ class SingleControl(BoxLayout):
             align_group.button_layout.add_widget(btn)
         row1.add_widget(align_group)
 
-        # 보드 제어
+        #보드 제어
         board_group = GroupBox(title="보드 제어", mode = "grid")
         for text, cmd in [
             ("보드 고정", "lock_board"),
@@ -159,7 +158,7 @@ class SingleControl(BoxLayout):
 
         
 
-        # CBS 제어
+        #CBS 제어
         cbs_group = GroupBox(title="CBS 제어", mode = 'grid')
         for text, cmd in [
             ("경로탐색", "compute_cbs"),
@@ -172,7 +171,7 @@ class SingleControl(BoxLayout):
             cbs_group.button_layout.add_widget(btn)
         row2.add_widget(cbs_group)
 
-        # 하단 구성
+        #하단 구성
         lower.add_widget(row1)
         lower.add_widget(row2)
 
@@ -181,20 +180,21 @@ class SingleControl(BoxLayout):
 
         Clock.schedule_interval(self.update_grid_from_backend, 0.1)
         Clock.schedule_interval(self.sync_scenario_mode, 0.5)
-    # ===== 로봇 선택 =====
+    
+    #로봇 선택
     def select_robot(self, rid):
         self.selected_robot_id = rid
         post("select_robot", rid=rid)
         FrameBus.set_selected_robot(rid)
         print(f"[UI] robot {rid} selected.")
 
-    # ===== Visual/Border 업데이트 =====
+    #Visual/Border 업데이트
     def _update_bg(self, *args):
         self.bg.pos = self.pos
         self.bg.size = self.size
         self.border.rectangle = (self.x, self.y, self.width, self.height)
 
-    # ===== GridWidget 백엔드 연동 =====
+    # GridWidget 백엔드 연동
     def update_grid_from_backend(self, dt):
         grid = FrameBus.get_grid_state()
         agents = FrameBus.get_agent_states()
@@ -213,7 +213,7 @@ class SingleControl(BoxLayout):
         )
 
 
-    # ===== 시나리오 모드 동기화 =====
+    #시나리오 모드 동기화
     def sync_scenario_mode(self, dt):
         mode = FrameBus.get_mode()
         if mode and mode != self.current_scenario_mode:
